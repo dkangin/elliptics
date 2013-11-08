@@ -35,6 +35,7 @@
 
 #include "elliptics/packet.h"
 #include "elliptics/interface.h"
+#include "library/original_id_helpers.h"
 
 #include "backends.h"
 #include "common.h"
@@ -82,7 +83,10 @@ static int blob_write(struct eblob_backend_config *c, void *state __unused, stru
 	if (io->flags & DNET_IO_FLAGS_NOCSUM)
 		flags |= BLOB_DISK_CTL_NOCSUM;
 
-	memcpy(key.id, io->id, EBLOB_ID_SIZE);
+        // We are replacing straightforward copying for zeroing down the first bytes
+        // memcpy(key.id, io->id, EBLOB_ID_SIZE);
+        copy_identifiers_io (&key, io->id);
+
 
 	if ((io->type == EBLOB_TYPE_META) && !(io->flags & DNET_IO_FLAGS_META)) {
 		dnet_backend_log(DNET_LOG_ERROR, "%s: EBLOB: blob-write: meta-check: COLUMN %d IS RESERVED FOR METADATA\n",
@@ -186,7 +190,10 @@ static int blob_read(struct eblob_backend_config *c, void *state, struct dnet_cm
 
 	dnet_convert_io_attr(io);
 
-	memcpy(key.id, io->id, EBLOB_ID_SIZE);
+       // We are replacing straightforward copying for zeroing down the first bytes
+       // memcpy(key.id, io->id, EBLOB_ID_SIZE);
+       copy_identifiers_io (&key, io->id);
+
 
 	if (io->flags & DNET_IO_FLAGS_NOCSUM) {
 		err = eblob_read_nocsum(b, &key, &fd, &orig_offset, &orig_size, io->type);
@@ -287,7 +294,10 @@ static int blob_del_range_callback(struct eblob_backend_config *c, struct dnet_i
 	int err;
 
 	dnet_backend_log(DNET_LOG_DEBUG, "%s: EBLOB: blob-read-range: DEL\n",dnet_dump_id_str(req->record_key));
-	memcpy(key.id, req->record_key, EBLOB_ID_SIZE);
+        // We are adding zeroing down the first bytes
+        //memcpy(key.id, req->record_key, EBLOB_ID_SIZE);
+        copy_identifiers_io (&key, req->record_key);
+
 	err = eblob_remove(c->eblob, &key, io->type);
 	if (err) {
 		dnet_backend_log(DNET_LOG_DEBUG, "%s: EBLOB: blob-read-range: DEL: err: %d\n",dnet_dump_id_str(req->record_key), err);
@@ -446,7 +456,9 @@ static int blob_del(struct eblob_backend_config *c, struct dnet_cmd *cmd)
 	struct eblob_key key;
 	int err;
 
-	memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
+        //memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
+        copy_identifiers_io (&key, cmd->id.id);
+
 
 	if (cmd->id.type != -1) {
 		err = eblob_remove(c->eblob, &key, cmd->id.type);
@@ -472,7 +484,8 @@ static int eblob_send(void *state, void *priv, struct dnet_id *id)
 	int *types, types_num, i;
 	int err, fd, ret;
 
-	memcpy(key.id, id->id, EBLOB_ID_SIZE);
+        //memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
+        copy_identifiers_io (&key, cmd->id.id);
 
 	if (id->type == -1) {
 		types_num = eblob_get_types(b, &types);
@@ -535,7 +548,8 @@ static int blob_file_info(struct eblob_backend_config *c, void *state, struct dn
 	uint64_t offset, size;
 	int fd, err;
 
-	memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
+        //memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
+        copy_identifiers_io (&key, cmd->id.id);
 	err = eblob_read(b, &key, &fd, &offset, &size, cmd->id.type);
 	if (err < 0) {
 		dnet_backend_log(DNET_LOG_ERROR, "%s: EBLOB: blob-file-info: info-read: %d: %s.\n",
