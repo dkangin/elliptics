@@ -2,7 +2,6 @@
 #define __ORIGINAL_ID_HELPERS_H
 
 #include <eblob/blob.h>
-#include "elliptics.h"
 #include "elliptics/packet.h"
 #include "elliptics/interface.h"
 
@@ -10,7 +9,7 @@
 extern "C" {
 #endif
 
-static inline void copy_identifiers_cmd (struct eblob_key *src_key, char* original_id)
+static inline void copy_identifiers_cmd (struct eblob_key *src_key, uint8_t* original_id)
 {
 	memset((void*)src_key->id, 0, EBLOB_ID_SIZE);
 	int id_size = sizeof (uint64_t);
