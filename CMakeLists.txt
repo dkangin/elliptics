@@ -14,10 +14,10 @@ STRING (REGEX MATCH "([0-9]+\\.[0-9]+)" ELLIPTICS_VERSION_ABI "${DEBFULLVERSION}
 STRING (REGEX MATCH "([0-9]+\\.[0-9]+$)" ELLIPTICS_VERSION_MINOR "${DEBFULLVERSION}")
 
 option(WITH_PYTHON "Build python bindings" ON)
-option(WITH_COCAINE "Build with cocaine support" ON)
+option(WITH_COCAINE "Build with cocaine support" OFF)
 option(WITH_EXAMPLES "Build example applications" ON)
-option(WITH_SMACK "Build ioserv with smack backend" ON)
-option(WITH_LEVELDB "Build ioserv with LevelDB backend" ON)
+option(WITH_SMACK "Build ioserv with smack backend" OFF)
+option(WITH_LEVELDB "Build ioserv with LevelDB backend" OFF)
 
 set(ELLIPTICS_VERSION "${ELLIPTICS_VERSION_ABI}.${ELLIPTICS_VERSION_MINOR}")
 
@@ -62,31 +62,31 @@ endif()
 set(CMAKE_THREAD_PREFER_PTHREAD ON)
 find_package(Threads REQUIRED)
 
-if(WITH_COCAINE)
-    find_package(ZMQ REQUIRED)
-    include_directories(${ZMQ_INCLUDE_DIRS})
+#if(WITH_COCAINE)
+#    find_package(ZMQ REQUIRED)
+#    include_directories(${ZMQ_INCLUDE_DIRS})
 
     # Find some cocaine
-    find_package(Cocaine REQUIRED)
-    include_directories(${COCAINE_INCLUDE_DIRS})
-    add_definitions(${COCAINE_CFLAGS})
-endif()
+#    find_package(Cocaine REQUIRED)
+#    include_directories(${COCAINE_INCLUDE_DIRS})
+#    add_definitions(${COCAINE_CFLAGS})
+#endif()
 
 # Find eblob
 find_package(Eblob REQUIRED)
 include_directories(${EBLOB_INCLUDE_DIRS})
 
-if(WITH_SMACK)
+#if(WITH_SMACK)
     # Find smack
-    find_package(Smack REQUIRED)
-    include_directories(${SMACK_INCLUDE_DIRS})
-endif()
+#    find_package(Smack REQUIRED)
+#    include_directories(${SMACK_INCLUDE_DIRS})
+#endif()
 
-if(WITH_LEVELDB)
+#if(WITH_LEVELDB)
     # Find LevelDB
-    find_package(LevelDB REQUIRED)
-    include_directories(${LEVELDB_INCLUDE_DIRS})
-endif()
+#    find_package(LevelDB REQUIRED)
+#    include_directories(${LEVELDB_INCLUDE_DIRS})
+#endif()
 
 # GoLD does no overlinking
 find_package(Boost REQUIRED COMPONENTS thread system)
