@@ -24,7 +24,7 @@ add_definitions(-DCONFIG_ELLIPTICS_VERSION_2=${ELLIPTICS_VERSION_2})
 add_definitions(-DCONFIG_ELLIPTICS_VERSION_3=${ELLIPTICS_VERSION_3})
 
 option(WITH_PYTHON "Build python bindings" ON)
-option(WITH_COCAINE "Build with cocaine support" ON)
+option(WITH_COCAINE "Build with cocaine support" OFF)
 option(WITH_EXAMPLES "Build example applications" ON)
 option(HAVE_MODULE_BACKEND_SUPPORT "Build ioserv with shared library backend support" ON)
 
