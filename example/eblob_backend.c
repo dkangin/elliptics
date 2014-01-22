@@ -181,7 +181,7 @@ static int blob_write(struct eblob_backend_config *c, void *state,
 
         // We are replacing straightforward copying for zeroing down the first bytes
         // memcpy(key.id, io->id, EBLOB_ID_SIZE);
-        copy_identifiers_cmd (&key, io->id);
+        copy_identifiers_cmd (key.id, io->id);
 
 	if (io->flags & DNET_IO_FLAGS_PREPARE) {
 		err = eblob_write_prepare(b, &key, io->num + ehdr_size, flags);
@@ -288,7 +288,7 @@ static int blob_read(struct eblob_backend_config *c, void *state, struct dnet_cm
 
         // We are replacing straightforward copying for zeroing down the first bytes
         // memcpy(key.id, io->id, EBLOB_ID_SIZE);
-        copy_identifiers_cmd (&key, io->id);
+        copy_identifiers_cmd (key.id, io->id);
 
 	if (io->flags & DNET_IO_FLAGS_NOCSUM)
 		csum = EBLOB_READ_NOCSUM;
@@ -489,7 +489,7 @@ static int blob_del_range_callback(struct eblob_range_request *req)
 			dnet_dump_id_str(req->record_key));
 
 	//memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
-	copy_identifiers_cmd (key, req->record_key);
+	copy_identifiers_cmd (key.id, req->record_key);
 	err = eblob_remove(req->back, &key);
 	if (err) {
 		dnet_backend_log(DNET_LOG_DEBUG, "%s: EBLOB: blob-read-range: DEL: err: %d\n",
@@ -570,9 +570,9 @@ static int blob_read_range(struct eblob_backend_config *c, void *state, struct d
 	memset(&req, 0, sizeof(req));
 
 	//memcpy(req.start, io->id, EBLOB_ID_SIZE);
-	copy_identifiers_cmd (&(io->id), &req.start, EBLOB_ID_SIZE);
+	copy_identifiers_cmd (io->id, req.start);
 	//memcpy(req.end, io->parent, EBLOB_ID_SIZE);
-	copy_identifiers_cmd (req.end, io->parent, EBLOB_ID_SIZE);
+	copy_identifiers_cmd (req.end, io->parent);
 	req.requested_offset = io->offset;
 	req.requested_size = io->size;
 	req.requested_limit_start = 0;
@@ -644,7 +644,7 @@ static int blob_del(struct eblob_backend_config *c, struct dnet_cmd *cmd)
 	int err;
 
         //memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
-        copy_identifiers_cmd (&key, cmd->id.id);
+        copy_identifiers_cmd (key.id, cmd->id.id);
 
 	err = eblob_remove(c->eblob, &key);
 	if (err) {
@@ -668,7 +668,7 @@ static int blob_file_info(struct eblob_backend_config *c, void *state, struct dn
 	dnet_ext_list_init(&elist);
 
         //memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
-        copy_identifiers_cmd (&key, cmd->id.id);
+        copy_identifiers_cmd (key.id, cmd->id.id);
 	err = eblob_read_return(b, &key, EBLOB_READ_NOCSUM, &wc);
 	if (err < 0) {
 		dnet_backend_log(DNET_LOG_ERROR, "%s: EBLOB: blob-file-info: info-read: %d: %s.\n",
@@ -744,7 +744,7 @@ static int eblob_backend_checksum(struct dnet_node *n, void *priv, struct dnet_i
 	int err;
 
         //memcpy(key.id, cmd->id.id, EBLOB_ID_SIZE);
-        copy_identifiers_cmd (&key, cmd->id.id);
+        copy_identifiers_cmd (key.id, id->id);
 	err = eblob_read_return(b, &key, EBLOB_READ_NOCSUM, &wc);
 	if (err < 0) {
 		dnet_backend_log(DNET_LOG_ERROR, "%s: EBLOB: blob-checksum: read: %d: %s.\n",

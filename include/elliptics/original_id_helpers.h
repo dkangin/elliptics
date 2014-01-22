@@ -13,7 +13,7 @@ static inline void copy_identifiers_cmd (uint8_t *src_key, uint8_t* original_id)
 {
 	memset((void*)src_key, 0, EBLOB_ID_SIZE);
 	int id_size = sizeof (uint64_t);
-	memcpy(src_key->id, original_id + EBLOB_ID_SIZE - sizeof (uint64_t), id_size);
+	memcpy(src_key, original_id + EBLOB_ID_SIZE - sizeof (uint64_t), id_size);
 }
 
 
