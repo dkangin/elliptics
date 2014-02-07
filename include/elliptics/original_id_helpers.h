@@ -11,9 +11,13 @@ extern "C" {
 
 static inline void copy_identifiers_cmd (uint8_t *src_key, uint8_t* original_id)
 {
-	memset((void*)src_key, 0, EBLOB_ID_SIZE);
-	int id_size = sizeof (uint64_t);
-    memcpy(src_key, original_id + EBLOB_ID_SIZE - id_size, sizeof (uint64_t));
+    memset((void*)src_key, 0, EBLOB_ID_SIZE);
+    int id_size = sizeof (uint64_t);
+    int i, j;
+    for (i = 0, j = EBLOB_ID_SIZE - 1; i < id_size; i++, j--)
+    {
+        src_key [i] = original_id [j];
+    }
 }
 
 
