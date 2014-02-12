@@ -1,3 +1,22 @@
+/*
+ * Copyright 2013+ Ruslan Nigmatullin <euroelessar@yandex.ru>
+ *
+ * This file is part of Elliptics.
+ *
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Elliptics is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "service.hpp"
 #include <cocaine/messages.hpp>
 
@@ -16,7 +35,7 @@ elliptics_service_t::elliptics_service_t(context_t &context, io::reactor_t &reac
 	debug() << m_elliptics << std::endl;
 
 	if (!m_elliptics) {
-		throw error_t("To use elliptics service storage must be also elliptics");
+		throw storage_error_t("To use elliptics service storage must be also elliptics");
 	}
 
 	on<io::storage::read  >("read",   std::bind(&elliptics_service_t::read,   this, _1, _2));

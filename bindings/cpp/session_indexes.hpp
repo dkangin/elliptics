@@ -1,3 +1,22 @@
+/*
+ * Copyright 2013+ Ruslan Nigmatullin <euroelessar@yandex.ru>
+ *
+ * This file is part of Elliptics.
+ *
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Elliptics is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef __CPP_SESSION_INDEXES_HPP
 #define __CPP_SESSION_INDEXES_HPP
 
@@ -22,11 +41,17 @@ struct dnet_indexes
 struct raw_data_pointer
 {
 	const void *data;
-	uint32_t size;
+	size_t size;
 
 	bool operator ==(const raw_data_pointer &o) const
 	{
 		return size == o.size && (size == 0 || data == o.data || memcmp(data, o.data, size) == 0);
+	}
+
+	static raw_data_pointer copy(const void *data, size_t size)
+	{
+		raw_data_pointer tmp = { data, size };
+		return tmp;
 	}
 };
 
@@ -46,6 +71,54 @@ struct raw_dnet_indexes
 	int shard_id;
 	int shard_count;
 	std::vector<raw_index_entry> indexes;
+};
+
+struct raw_find_indexes_result_entry
+{
+	dnet_raw_id id;
+	std::vector<raw_index_entry> indexes;
+};
+
+inline std::ostream &operator <<(std::ostream &out, const raw_index_entry &v)
+{
+	out << "index{" << dnet_dump_id_str(v.index.id) << ",\"";
+	out.write(reinterpret_cast<const char *>(v.data.data), v.data.size);
+	out << "\"}";
+	return out;
+}
+
+template <int CompareData = compare_data>
+struct raw_dnet_raw_id_less_than : public dnet_raw_id_less_than<CompareData>
+{
+	using dnet_raw_id_less_than<CompareData>::operator ();
+
+	inline bool operator() (const raw_index_entry &a, const dnet_raw_id &b) const
+	{
+		return operator() (a.index, b);
+	}
+	inline bool operator() (const dnet_raw_id &a, const raw_index_entry &b) const
+	{
+		return operator() (a, b.index);
+	}
+	inline bool operator() (const raw_index_entry &a, const raw_index_entry &b) const
+	{
+		ssize_t cmp = memcmp(a.index.id, b.index.id, sizeof(b.index.id));
+		if (CompareData && cmp == 0) {
+			cmp = a.data.size - b.data.size;
+			if (cmp == 0) {
+				cmp = memcmp(a.data.data, b.data.data, a.data.size);
+			}
+		}
+		return cmp < 0;
+	}
+	inline bool operator() (const raw_index_entry &a, const raw_find_indexes_result_entry &b) const
+	{
+		return operator() (a.index, b.id);
+	}
+	inline bool operator() (const raw_find_indexes_result_entry &a, const raw_index_entry &b) const
+	{
+		return operator() (a.id, b.index);
+	}
 };
 
 struct update_request
@@ -113,7 +186,7 @@ static inline void find_result_unpack(dnet_node *node, dnet_id *id, const data_p
 static inline dnet_raw_id transform_index_id(session &sess, const dnet_raw_id &data_id, int shard_id)
 {
 	dnet_raw_id id;
-	dnet_indexes_transform_index_id(sess.get_node().get_native(), &data_id, &id, shard_id);
+	dnet_indexes_transform_index_id(sess.get_native_node(), &data_id, &id, shard_id);
 	return id;
 }
 
@@ -122,6 +195,26 @@ static inline dnet_raw_id transform_index_id(session &sess, const dnet_raw_id &d
 namespace msgpack
 {
 using namespace ioremap::elliptics;
+
+enum dnet_indexes_version : uint16_t {
+	dnet_indexes_version_second = 2
+};
+
+enum update_request_version : uint16_t {
+	update_request_version_first = 1
+};
+
+enum update_index_request_version : uint16_t {
+	update_index_request_version_first = 1
+};
+
+enum update_result_version : uint16_t {
+	update_result_version_first = 1
+};
+
+enum find_indexes_result_entry_version : uint16_t {
+	find_indexes_result_entry_version_first = 1
+};
 
 inline dnet_id &operator >>(msgpack::object o, dnet_id &v)
 {
@@ -264,7 +357,7 @@ inline dnet_indexes &operator >>(msgpack::object o, dnet_indexes &v)
 	uint16_t version = 0;
 	p[0].convert(&version);
 	switch (version) {
-	case 2: {
+	case dnet_indexes_version_second: {
 		if (size != 4)
 			throw msgpack::type_error();
 
@@ -284,7 +377,7 @@ template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const dnet_indexes &v)
 {
 	o.pack_array(4);
-	o.pack(2);
+	o.pack(uint16_t(dnet_indexes_version_second));
 	o.pack(v.indexes);
 	o.pack(v.shard_id);
 	o.pack(v.shard_count);
@@ -302,7 +395,7 @@ inline raw_dnet_indexes &operator >>(msgpack::object o, raw_dnet_indexes &v)
 	uint16_t version = 0;
 	p[0].convert(&version);
 	switch (version) {
-	case 2: {
+	case dnet_indexes_version_second: {
 		if (size != 4)
 			throw msgpack::type_error();
 
@@ -322,7 +415,7 @@ template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const raw_dnet_indexes &v)
 {
 	o.pack_array(4);
-	o.pack(2);
+	o.pack(uint16_t(dnet_indexes_version_second));
 	o.pack(v.indexes);
 	o.pack(v.shard_id);
 	o.pack(v.shard_count);
@@ -333,7 +426,7 @@ template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const update_request &request)
 {
 	o.pack_array(3);
-	o.pack(1); // version
+	o.pack(uint16_t(update_request_version_first));
 	o.pack(request.id);
 	o.pack(request.indexes);
 	return o;
@@ -350,7 +443,7 @@ inline update_request &operator >>(msgpack::object obj, update_request &request)
 	uint16_t version = 0;
 	array[0].convert(&version);
 	switch (version) {
-	case 1: {
+	case update_request_version_first: {
 		if (size != 3)
 			throw msgpack::type_error();
 
@@ -369,7 +462,7 @@ template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const update_index_request &request)
 {
 	o.pack_array(4);
-	o.pack(1); // version
+	o.pack(uint16_t(update_index_request_version_first)); // version
 	o.pack(request.id);
 	o.pack(request.index);
 	o.pack(request.remove);
@@ -387,7 +480,7 @@ inline update_index_request &operator >>(msgpack::object obj, update_index_reque
 	uint16_t version = 0;
 	array[0].convert(&version);
 	switch (version) {
-	case 1: {
+	case update_index_request_version_first: {
 		if (size != 4)
 			throw msgpack::type_error();
 
@@ -407,7 +500,7 @@ template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const update_result &result)
 {
 	o.pack_array(2);
-	o.pack(1); // version
+	o.pack(uint16_t(update_result_version_first));
 	o.pack(result.indexes);
 	return o;
 }
@@ -423,7 +516,7 @@ inline update_result &operator >>(msgpack::object obj, update_result &result)
 	uint16_t version = 0;
 	array[0].convert(&version);
 	switch (version) {
-	case 1: {
+	case update_result_version_first: {
 		if (size != 2)
 			throw msgpack::type_error();
 
@@ -441,7 +534,7 @@ template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const find_indexes_result_entry &result)
 {
 	o.pack_array(3);
-	o.pack(1); // version
+	o.pack(uint16_t(find_indexes_result_entry_version_first));
 	o.pack(result.id);
 	o.pack(result.indexes);
 	return o;
@@ -458,7 +551,43 @@ inline find_indexes_result_entry &operator >>(msgpack::object obj, find_indexes_
 	uint16_t version = 0;
 	array[0].convert(&version);
 	switch (version) {
-	case 1: {
+	case find_indexes_result_entry_version_first: {
+		if (size != 3)
+			throw msgpack::type_error();
+
+		array[1].convert(&result.id);
+		array[2].convert(&result.indexes);
+		break;
+	}
+	default:
+		throw msgpack::type_error();
+	}
+
+	return result;
+}
+
+template <typename Stream>
+inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const raw_find_indexes_result_entry &result)
+{
+	o.pack_array(3);
+	o.pack(uint16_t(find_indexes_result_entry_version_first));
+	o.pack(result.id);
+	o.pack(result.indexes);
+	return o;
+}
+
+inline raw_find_indexes_result_entry &operator >>(msgpack::object obj, raw_find_indexes_result_entry &result)
+{
+	if (obj.type != msgpack::type::ARRAY || obj.via.array.size < 1)
+		throw msgpack::type_error();
+
+	object *array = obj.via.array.ptr;
+	const uint32_t size = obj.via.array.size;
+
+	uint16_t version = 0;
+	array[0].convert(&version);
+	switch (version) {
+	case find_indexes_result_entry_version_first: {
 		if (size != 3)
 			throw msgpack::type_error();
 

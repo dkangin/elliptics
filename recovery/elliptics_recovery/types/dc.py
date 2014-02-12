@@ -1,5 +1,27 @@
+# =============================================================================
+# 2013+ Copyright (c) Kirill Smorodinnikov <shaitkir@gmail.com>
+# 2013+ Copyright (c) Alexey Ivanov <rbtz@ph34r.me>
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# =============================================================================
+
 """
-XXX:
+Data Center recovery type - recovers keys at the expense of keys from other group.
+
+ * Find ranges that host is responsible for now.
+ * Start metadata-only iterator for the found ranges on local and remote hosts (from non-local groups).
+ * Sort iterators' outputs.
+ * Computes diff between local and remote iterator.
+ * Recover keys provided by diff using bulk APIs.
 """
 
 import sys
@@ -24,7 +46,7 @@ def run_iterator(ctx, address, eid, ranges, stats):
     """
     Runs iterator for all ranges on node specified by address
     """
-    node = elliptics_create_node(address=address, elog=ctx.elog)
+    node = elliptics_create_node(address=address, elog=ctx.elog, wait_timeout=ctx.wait_timeout)
 
     try:
         timestamp_range = ctx.timestamp.to_etime(), Time.time_max().to_etime()
@@ -123,7 +145,8 @@ def recover((address, )):
                                        elog=ctx.elog,
                                        io_thread_num=10,
                                        net_thread_num=10,
-                                       nonblocking_io_thread_num=10
+                                       nonblocking_io_thread_num=10,
+                                       wait_timeout=ctx.wait_timeout
                                        )
     log.debug("Creating direct session: {0}".format(ctx.address))
     local_session = elliptics_create_session(node=local_node,
@@ -135,7 +158,8 @@ def recover((address, )):
                                         elog=ctx.elog,
                                         io_thread_num=10,
                                         net_thread_num=10,
-                                        nonblocking_io_thread_num=10
+                                        nonblocking_io_thread_num=10,
+                                        wait_timeout=ctx.wait_timeout
                                         )
     log.debug("Creating direct session: {0}".format(diff.address))
     remote_session = elliptics_create_session(node=remote_node,
@@ -168,10 +192,10 @@ def recover_keys(ctx, address, group_id, keys, local_session, remote_session, st
     batch = None
 
     try:
-        batch = remote_session.bulk_read_async(keys)
+        batch = remote_session.bulk_read(keys)
         it = iter(batch)
     except Exception as e:
-        log.debug("Bulk read failed: {0} keys: {1}".format(keys_len, e))
+        log.error("Bulk read failed: {0} keys: {1}".format(keys_len, e))
         stats.counter('read_keys', -keys_len)
         stats.counter('recovered_keys', -keys_len)
         return False
@@ -181,12 +205,17 @@ def recover_keys(ctx, address, group_id, keys, local_session, remote_session, st
     while True:
         try:
             b = next(it)
-            async_write_results.append((local_session.write_data_async((b.id, b.timestamp, b.user_flags), b.data), len(b.data)))
+            io = elliptics.IoAttr()
+            io.id = b.id
+            io.timestamp = b.timestamp
+            io.user_flags = b.user_flags
+            async_write_results.append((local_session.write_data(io, b.data),
+                                        len(b.data)))
         except StopIteration:
             break
         except Exception as e:
             failed += 1
-            log.debug("Write failed: {0}".format(e))
+            log.error("Write failed: {0}".format(e))
 
     read_len = len(async_write_results)
     stats.counter('read_keys', read_len)
@@ -204,7 +233,7 @@ def recover_keys(ctx, address, group_id, keys, local_session, remote_session, st
                 failures_size += bsize
                 failed += 1
         except Exception as e:
-            log.debug("Write failed: {0}".format(e))
+            log.error("Write failed: {0}".format(e))
             failures_size += bsize
             failed += 1
 

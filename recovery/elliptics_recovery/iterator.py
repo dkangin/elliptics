@@ -1,3 +1,19 @@
+# =============================================================================
+# 2013+ Copyright (c) Alexey Ivanov <rbtz@ph34r.me>
+# 2013+ Copyright (c) Kirill Smorodinnikov <shaitkir@gmail.com>
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# =============================================================================
+
 """
 Wrappers for iterator and it's result container
 """
@@ -15,11 +31,10 @@ import elliptics
 
 @logged_class
 class IteratorResult(object):
-    __doc__ = \
-        """
-        Container for iterator results.
-        Provides IteratorResultContainer wrapper.
-        """
+    """
+    Container for iterator results.
+    Provides IteratorResultContainer wrapper.
+    """
 
     def __init__(self,
                  address=None,
@@ -192,14 +207,13 @@ class IteratorResult(object):
 
 @logged_class
 class Iterator(object):
-    __doc__ = \
-        """
-        Wrapper on top of elliptics new iterator and it's result container
-        """
+    """
+    Wrapper on top of elliptics new iterator and it's result container
+    """
 
     def __init__(self, node, group):
         self.session = elliptics.Session(node)
-        self.session.set_groups([group])
+        self.session.groups = [group]
 
     def start(self,
               eid=IdRange.ID_MIN,
@@ -232,12 +246,12 @@ class Iterator(object):
                 if record.status != 0:
                     raise RuntimeError("Iteration status check failed: {0}".format(record.status))
                 result.append(record)
-                last = num
+                last = num + 1
                 if last % batch_size == 0:
                     yield batch_size
 
             elapsed_time = records.elapsed_time()
-            print (elapsed_time.tsec, elapsed_time.tnsec)
+            self.log.debug("Time spended for iterator: {0}/{1}".format(elapsed_time.tsec, elapsed_time.tnsec))
             yield last % batch_size
             yield result
         except Exception as e:
@@ -271,10 +285,9 @@ class Iterator(object):
 
 
 class MergeData(object):
-    __doc__ = \
-        """
-        Assist class for IteratorResult.__merge__
-        """
+    """
+    Assist class for IteratorResult.__merge__
+    """
 
     def __init__(self, iter, container):
         self.iter = iter
@@ -284,10 +297,15 @@ class MergeData(object):
         self.next()
 
     def __cmp__(self, other):
-        key_cmp = cmp(self.value.key, other.value.key)
-        if key_cmp != 0:
-            return key_cmp
-        return cmp(other.value.timestamp, self.value.timestamp)
+        cmp_res = cmp(self.value.key, other.value.key)
+
+        if cmp_res == 0:
+            cmp_res = cmp(other.value.timestamp, self.value.timestamp)
+
+            if cmp_res == 0:
+                cmp_res = cmp(self.value.size, other.value.size)
+
+        return cmp_res
 
     def next(self):
         if self.iter is None:

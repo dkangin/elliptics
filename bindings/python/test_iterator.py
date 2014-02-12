@@ -1,6 +1,21 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
+# =============================================================================
+# 2013+ Copyright (c) Kirill Smorodinnikov <shaitkir@gmail.com>
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# =============================================================================
+
 import sys
 
 sys.path.insert(0, "bindings/python/")
@@ -8,8 +23,8 @@ import elliptics
 
 def range(key_begin, key_end):
     ret = elliptics.IteratorRange()
-    ret.key_begin = key_begin
-    ret.key_end = key_end
+    ret.key_begin = elliptics.Id(key_begin, 0)
+    ret.key_end = elliptics.Id(key_end, 0)
     return ret
 
 if __name__ == '__main__':
@@ -24,7 +39,7 @@ if __name__ == '__main__':
     s = elliptics.Session(n)
     s.add_groups([2])
 
-    ranges = [range(elliptics.Id([0] * 64, 0), elliptics.Id([100] + [255] * 63, 0)), range(elliptics.Id([200] + [0] * 63, 0), elliptics.Id([220] + [255] * 63, 0))]
+    ranges = [range([0] * 64, [100] + [255] * 63), range([200] + [0] * 63, [220] + [255] * 63)]
 
     eid = elliptics.Id([0] * 64, 2)
     iterator = s.start_iterator(eid, ranges, \

@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ * 
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
+ * 
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define _XOPEN_SOURCE 600
@@ -85,18 +89,27 @@ void dnet_indexes_transform_object_id(struct dnet_node *node, const struct dnet_
       (((x) & 0x0000ff00) <<  8) | (((x) & 0x000000ff) << 24))
 #endif
 
-void dnet_indexes_transform_index_id(struct dnet_node *node, const struct dnet_raw_id *src, struct dnet_raw_id *id, int shard_id)
+void dnet_indexes_transform_index_prepare(struct dnet_node *node, const struct dnet_raw_id *src, struct dnet_raw_id *id)
 {
 	char suffix[] = "\0index_table";
 
 	dnet_indexes_transform_id(node, src->id, id->id, suffix, sizeof(suffix));
 
 	memset(id->id, 0, DNET_ID_SIZE / 2);
+}
 
+void dnet_indexes_transform_index_id_raw(struct dnet_node *node, struct dnet_raw_id *id, int shard_id)
+{
 	unsigned shard_int = (1ull << 32) * shard_id / node->indexes_shard_count;
 
 	// Convert to Big-Endian to set less-significant bytes to the begin
 	*(unsigned *)id->id = dnet_swap32_to_be(shard_int);
+}
+
+void dnet_indexes_transform_index_id(struct dnet_node *node, const struct dnet_raw_id *src, struct dnet_raw_id *id, int shard_id)
+{
+	dnet_indexes_transform_index_prepare(node, src, id);
+	dnet_indexes_transform_index_id_raw(node, id, shard_id);
 }
 
 int dnet_indexes_get_shard_id(struct dnet_node *node, const struct dnet_raw_id *object_id)
@@ -163,13 +176,13 @@ static char *dnet_counter_strings[] = {
 	[DNET_CNTR_VM_CACHED] = "DNET_CNTR_VM_CACHED",
 	[DNET_CNTR_VM_BUFFERS] = "DNET_CNTR_VM_BUFFERS",
 	[DNET_CNTR_NODE_FILES] = "DNET_CNTR_NODE_FILES",
-	[DNET_CNTR_NODE_LAST_MERGE] = "DNET_CNTR_NODE_LAST_MERGE",
-	[DNET_CNTR_NODE_CHECK_COPY] = "DNET_CNTR_NODE_CHECK_COPY",
-	[DNET_CNTR_DBR_NOREC] = "DNET_CNTR_DBR_NOREC",
-	[DNET_CNTR_DBR_SYSTEM] = "DNET_CNTR_DBR_SYSTEM",
-	[DNET_CNTR_DBR_ERROR] = "DNET_CNTR_DBR_ERROR",
-	[DNET_CNTR_DBW_SYSTEM] = "DNET_CNTR_DBW_SYSTEM",
-	[DNET_CNTR_DBW_ERROR] = "DNET_CNTR_DBW_ERROR",
+	[DNET_CNTR_NODE_FILES_REMOVED] = "DNET_CNTR_NODE_FILES_REMOVED",
+	[DNET_CNTR_RESERVED2] = "DNET_CNTR_RESERVED2",
+	[DNET_CNTR_RESERVED3] = "DNET_CNTR_RESERVED3",
+	[DNET_CNTR_RESERVED4] = "DNET_CNTR_RESERVED4",
+	[DNET_CNTR_RESERVED5] = "DNET_CNTR_RESERVED5",
+	[DNET_CNTR_RESERVED6] = "DNET_CNTR_RESERVED6",
+	[DNET_CNTR_RESERVED7] = "DNET_CNTR_RESERVED7",
 	[DNET_CNTR_UNKNOWN] = "UNKNOWN",
 };
 
@@ -203,6 +216,7 @@ int dnet_copy_addrs(struct dnet_net_state *nst, struct dnet_addr *addrs, int add
 	int err = 0, i;
 
 	if (nst->addrs) {
+		// idx = -1 for just created server node, which can not have ->addrs yet
 		dnet_log(n, DNET_LOG_NOTICE, "%s: do not copy %d addrs, already have %d, idx: %d\n",
 				dnet_server_convert_dnet_addr(&nst->addrs[nst->idx]),
 				addr_num, nst->addr_num, nst->idx);
@@ -244,7 +258,16 @@ static int dnet_add_received_state(struct dnet_net_state *connected_state,
 	struct dnet_addr *addr = &cnt->addrs[connected_state->idx];
 	struct dnet_net_state *nst;
 	struct dnet_id raw;
-	int join;
+	char conn_addr_str[128];
+	char recv_addr_str[128];
+	int join, i;
+
+	for (i = 0; i < cnt->addr_num; ++i) {
+		dnet_log(n, DNET_LOG_NOTICE, "%s: %d/%d: idx: %d, received addr: %s.\n",
+				dnet_server_convert_dnet_addr_raw(&connected_state->addr, conn_addr_str, sizeof(conn_addr_str)),
+				i, cnt->addr_num, connected_state->idx,
+				dnet_server_convert_dnet_addr_raw(&cnt->addrs[i], recv_addr_str, sizeof(recv_addr_str)));
+	}
 
 	dnet_setup_id(&raw, group_id, ids[0].id);
 
@@ -267,8 +290,10 @@ static int dnet_add_received_state(struct dnet_net_state *connected_state,
 		join = DNET_JOIN;
 
 	nst = dnet_state_create(n, group_id, ids, id_num, addr,	s, &err, join, connected_state->idx, dnet_state_net_process);
-	if (!nst)
-		goto err_out_close;
+	if (!nst) {
+		// socket is already closed
+		goto err_out_exit;
+	}
 
 	err = dnet_copy_addrs(nst, cnt->addrs, cnt->addr_num);
 	if (err)
@@ -284,8 +309,6 @@ err_out_put:
 	dnet_state_put(nst);
 	return err;
 
-err_out_close:
-	dnet_sock_close(s);
 err_out_exit:
 	return err;
 }
@@ -317,13 +340,24 @@ static int dnet_process_route_reply(struct dnet_net_state *st, struct dnet_addr_
 		}
 	}
 
+	err = 0;
 	for (i = 0; i < cnt->addr_num; ++i) {
+		struct dnet_addr *ta = &cnt->addrs[i];
 		char tmp[128];
-		dnet_log(n, DNET_LOG_NOTICE, "%s: route reply: %s, ids-num: %d\n",
-				server_addr, dnet_server_convert_dnet_addr_raw(&cnt->addrs[i], tmp, sizeof(tmp)), ids_num);
+
+		if (dnet_empty_addr(ta)) {
+			dnet_log(n, DNET_LOG_ERROR, "%s: received zero address route reply: %s, ids-num: %d, aborting route update\n",
+					server_addr, dnet_server_convert_dnet_addr_raw(ta, tmp, sizeof(tmp)), ids_num);
+			err = -ENOTTY;
+		} else {
+			dnet_log(n, DNET_LOG_NOTICE, "%s: route reply: %s, ids-num: %d\n",
+					server_addr, dnet_server_convert_dnet_addr_raw(ta, tmp, sizeof(tmp)), ids_num);
+		}
 	}
 
-	err = dnet_add_received_state(st, cnt, group_id, ids, ids_num);
+	if (!err) {
+		err = dnet_add_received_state(st, cnt, group_id, ids, ids_num);
+	}
 
 	dnet_log(n, DNET_LOG_NOTICE, "%s: route reply: recv-addr-num: %d, local-addr-num: %d, idx: %d, err: %d\n",
 			server_addr, cnt->addr_num, n->addr_num, st->idx, err);
@@ -508,7 +542,7 @@ static struct dnet_net_state *dnet_add_state_socket(struct dnet_node *n, struct 
 		goto err_out_exit;
 	}
 
-	err = dnet_version_compare(st, version);
+	err = dnet_version_check(st, version);
 	if (err)
 		goto err_out_exit;
 
@@ -553,11 +587,23 @@ static struct dnet_net_state *dnet_add_state_socket(struct dnet_node *n, struct 
 		goto err_out_free;
 	}
 
-	// This anyway doesn't work
+	// This anyway doesn't work - there are issues with BE/LE conversion
 	dnet_convert_addr_container(cnt);
+
+	size = cmd->size - sizeof(struct dnet_addr) * cnt->addr_num - sizeof(struct dnet_addr_container);
+	num = size / sizeof(struct dnet_raw_id);
+
+	ids = data + sizeof(struct dnet_addr) * cnt->addr_num + sizeof(struct dnet_addr_container);
 
 	idx = -1;
 	for (i = 0; i < cnt->addr_num; ++i) {
+		if (dnet_empty_addr(&cnt->addrs[i])) {
+			dnet_log(n, DNET_LOG_ERROR, "connected-to-addr: %s: received wildcard (like 0.0.0.0) addr: ids: %d, addr-num: %d, idx: %d.\n",
+					dnet_server_convert_dnet_addr(addr), num, cnt->addr_num, idx);
+			err = -EPROTO;
+			goto err_out_free;
+		}
+
 		if (dnet_addr_equal(addr, &cnt->addrs[i])) {
 			idx = i;
 			break;
@@ -569,13 +615,12 @@ static struct dnet_net_state *dnet_add_state_socket(struct dnet_node *n, struct 
 		goto err_out_free;
 	}
 
-	size = cmd->size - sizeof(struct dnet_addr) * cnt->addr_num - sizeof(struct dnet_addr_container);
-	num = size / sizeof(struct dnet_raw_id);
-
-	ids = data + sizeof(struct dnet_addr) * cnt->addr_num + sizeof(struct dnet_addr_container);
-
-	for (i=0; i<num; ++i)
+	for (i=0; i<num; ++i) {
 		dnet_convert_raw_id(&ids[i]);
+		dnet_log(n, DNET_LOG_NOTICE, "connected-to-addr: %s: received ids: %d/%d, addr-num: %d, idx: %d, id: %s.\n",
+				dnet_server_convert_dnet_addr(addr), i, num, cnt->addr_num, idx,
+				dnet_dump_id_str(ids[i].id));
+	}
 
 	st = dnet_state_create(n, cmd->id.group_id, ids, num, addr, s, &err, join, idx, dnet_state_net_process);
 	if (!st) {
@@ -583,6 +628,7 @@ static struct dnet_net_state *dnet_add_state_socket(struct dnet_node *n, struct 
 		s = -1;
 		goto err_out_free;
 	}
+	memcpy(st->version, version, sizeof(st->version));
 	dnet_log(n, DNET_LOG_NOTICE, "%s: connected: id-num: %d, addr-num: %d, idx: %d.\n",
 			dnet_server_convert_dnet_addr(addr), num, cnt->addr_num, idx);
 	free(data);
@@ -603,6 +649,8 @@ int dnet_add_state(struct dnet_node *n, char *addr_str, int port, int family, in
 	int s, err, join = DNET_WANT_RECONNECT;
 	struct dnet_addr addr;
 	struct dnet_net_state *st;
+	char parsed_addr_str[128];
+	char state_addr_str[128];
 
 	memset(&addr, 0, sizeof(addr));
 
@@ -625,9 +673,19 @@ int dnet_add_state(struct dnet_node *n, char *addr_str, int port, int family, in
 	if (!((n->flags | flags) & DNET_CFG_NO_ROUTE_LIST))
 		dnet_recv_route_list(st);
 
+	dnet_log(n, DNET_LOG_NOTICE, "%s: added new state %s:%d:%d, addr: %s, flags: 0x%x, route-request: %d\n",
+			dnet_server_convert_dnet_addr_raw(&st->addr, state_addr_str, sizeof(state_addr_str)),
+			addr_str, port, family,
+			dnet_server_convert_dnet_addr_raw(&addr, parsed_addr_str, sizeof(parsed_addr_str)),
+			flags, !((n->flags | flags) & DNET_CFG_NO_ROUTE_LIST));
+
 	return 0;
 
 err_out_reconnect:
+	dnet_log(n, DNET_LOG_NOTICE, "%s: failed to add new state %s:%d:%d, flags: 0x%x, route-request: %d, err: %d\n",
+			dnet_server_convert_dnet_addr_raw(&addr, parsed_addr_str, sizeof(parsed_addr_str)),
+			addr_str, port, family, flags, !((n->flags | flags) & DNET_CFG_NO_ROUTE_LIST), err);
+
 	/* if state is already exist, it should not be an error */
 	if (err == -EEXIST)
 		err = 0;
@@ -1354,7 +1412,7 @@ int dnet_try_reconnect(struct dnet_node *n)
 			goto out_remove;
 		}
 
-		dnet_sock_close(s);
+		// otherwise socket is already closed
 
 		dnet_log(n, DNET_LOG_ERROR, "Failed to add state during reconnection to %s, can remove state from reconnection list due to error: %d\n",
 				dnet_server_convert_dnet_addr(&ast->addr), err);
@@ -1446,6 +1504,19 @@ err_out_destroy:
 struct dnet_addr *dnet_state_addr(struct dnet_net_state *st)
 {
 	return &st->addr;
+}
+
+int dnet_version_compare(struct dnet_net_state *st, int *version)
+{
+	size_t i;
+
+	for (i = 0; i < 4; ++i) {
+		if (st->version[i] != version[i]) {
+			return st->version[i] - version[i];
+		}
+	}
+
+	return 0;
 }
 
 static int dnet_stat_complete(struct dnet_net_state *state, struct dnet_cmd *cmd, void *priv)
@@ -1719,12 +1790,17 @@ static int dnet_update_status_complete(struct dnet_net_state *state, struct dnet
 	struct dnet_update_status_priv *p = priv;
 
 	if (is_trans_destroyed(state, cmd)) {
+		int err = -ENOENT;
+		if (cmd)
+			err = cmd->status;
+
 		dnet_wakeup(p->w, p->w->cond++);
 		dnet_wait_put(p->w);
 		if (atomic_dec_and_test(&p->refcnt)) {
 			free(p);
-			return -ENOENT;
 		}
+
+		return err;
 	}
 
 	if (cmd->size == sizeof(struct dnet_node_status)) {
@@ -1769,10 +1845,12 @@ int dnet_update_status(struct dnet_session *s, struct dnet_addr *addr, struct dn
 		goto err_out_exit;
 	}
 
+	atomic_init(&priv->refcnt, 1);
+
 	priv->w = dnet_wait_alloc(0);
 	if (!priv->w) {
 		err = -ENOMEM;
-		goto err_out_exit;
+		goto err_out_free;
 	}
 
 	ctl.complete = dnet_update_status_complete;
@@ -1783,6 +1861,8 @@ int dnet_update_status(struct dnet_session *s, struct dnet_addr *addr, struct dn
 	ctl.data = status;
 
 	dnet_wait_get(priv->w);
+	atomic_inc(&priv->refcnt);
+
 	dnet_request_cmd_single(s, NULL, &ctl);
 
 	err = dnet_wait_event(priv->w, priv->w->cond == 1, dnet_session_get_timeout(s));
@@ -1790,6 +1870,8 @@ int dnet_update_status(struct dnet_session *s, struct dnet_addr *addr, struct dn
 	if (!err && priv) {
 		memcpy(status, &priv->status, sizeof(struct dnet_node_status));
 	}
+
+err_out_free:
 	if (atomic_dec_and_test(&priv->refcnt))
 		free(priv);
 
@@ -2281,9 +2363,19 @@ err_out_exit:
 static int dnet_iterator_response_cmp(const void *r1, const void *r2)
 {
 	const struct dnet_iterator_response *a = r1, *b = r2;
-	const int diff = dnet_id_cmp_str(a->key.id, b->key.id);
+	int diff = dnet_id_cmp_str(a->key.id, b->key.id);
 
-	return diff ? diff : dnet_time_cmp(&a->timestamp, &b->timestamp);
+	if (diff == 0) {
+		diff = dnet_time_cmp(&b->timestamp, &a->timestamp);
+		if (diff == 0) {
+			if (a->size > b->size)
+				diff = -1;
+			if(a->size < b->size)
+				diff = 1;
+		}
+	}
+
+	return diff;
 }
 
 /*!
@@ -2437,10 +2529,9 @@ int64_t dnet_iterator_response_container_diff(int diff_fd, int left_fd, uint64_t
 		const struct dnet_iterator_response *right =
 			(struct dnet_iterator_response *)right_map.data + right_pos;
 		const int cmp_id = dnet_id_cmp_str(left->key.id, right->key.id);
-		const int cmp_ts = dnet_time_cmp(&left->timestamp, &right->timestamp);
+		const int cmp = dnet_iterator_response_cmp(left, right);
 
-		if (left_offset < left_size &&
-				(cmp_id < 0 || (cmp_id == 0 && cmp_ts >= 0))) {
+		if (left_offset < left_size && cmp <= 0) {
 			/*
 			 * If we can move left pointer and left key is less or
 			 * same but with lesser timestamp we skip record.
@@ -2552,7 +2643,7 @@ static int dnet_iterator_set_state_nolock(struct dnet_node *n,
 	pthread_mutex_lock(&it->lock);
 
 	/* We don't want to have two different names for the same thing */
-	if (action == DNET_ITERATOR_ACTION_CONT)
+	if (action == DNET_ITERATOR_ACTION_CONTINUE)
 		action = DNET_ITERATOR_ACTION_START;
 
 	/* Check that transition is valid */

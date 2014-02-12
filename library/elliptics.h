@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ *
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __DNET_ELLIPTICS_H
@@ -39,7 +43,6 @@ typedef unsigned short u_short;
 
 #include "list.h"
 
-#undef offsetof
 #include "rbtree.h"
 
 #include "atomic.h"
@@ -116,7 +119,7 @@ struct dnet_net_state
 	atomic_t		refcnt;
 	int			read_s, write_s;
 
-	int			need_exit;
+	int			__need_exit;
 
 	int			stall;
 
@@ -165,6 +168,9 @@ struct dnet_net_state
 	struct dnet_idc		*idc;
 
 	struct dnet_stat_count	stat[__DNET_CMD_MAX];
+
+	/* Remote protocol version */
+	int version[4];
 };
 
 int dnet_socket_local_addr(int s, struct dnet_addr *addr);
@@ -414,6 +420,10 @@ struct dnet_io {
 
 	struct dnet_work_pool	*recv_pool;
 	struct dnet_work_pool	*recv_pool_nb;
+
+	// condition variable for waiting when io pools are able to process packets
+	pthread_mutex_t		full_lock;
+	pthread_cond_t		full_wait;
 };
 
 int dnet_state_accept_process(struct dnet_net_state *st, struct epoll_event *ev);
@@ -445,8 +455,7 @@ void dnet_oplock(struct dnet_node *n, struct dnet_id *key);
 void dnet_opunlock(struct dnet_node *n, struct dnet_id *key);
 int dnet_optrylock(struct dnet_node *n, struct dnet_id *key);
 
-struct dnet_config_data
-{
+struct dnet_config_data {
 	struct dnet_log backend_logger;
 	char *logger_value;
 
@@ -516,8 +525,6 @@ struct dnet_node
 	pthread_t		reconnect_tid;
 	long			stall_count;
 
-	pthread_t		monitor_tid;
-	int			monitor_fd;
 
 	struct dnet_backend_callbacks	*cb;
 
@@ -555,7 +562,13 @@ struct dnet_node
 	pthread_mutex_t		iterator_lock;
 
 	size_t			cache_size;
+	size_t			caches_number;
+	size_t			cache_pages_number;
+	unsigned int	*cache_pages_proportions;
 	void			*cache;
+
+	void			*monitor;
+	pthread_rwlock_t monitor_rwlock;
 
 	struct dnet_config_data *config_data;
 };
@@ -733,9 +746,6 @@ int dnet_check_thread_start(struct dnet_node *n);
 void dnet_check_thread_stop(struct dnet_node *n);
 int dnet_try_reconnect(struct dnet_node *n);
 
-void dnet_monitor_exit(struct dnet_node *n);
-int dnet_monitor_init(struct dnet_node *n, struct dnet_config *cfg);
-
 int dnet_set_name(char *name);
 int dnet_ioprio_set(long pid, int class_id, int prio);
 int dnet_ioprio_get(long pid);
@@ -769,6 +779,8 @@ int dnet_cmd_cache_lookup(struct dnet_net_state *st, struct dnet_cmd *cmd);
 int dnet_indexes_init(struct dnet_node *, struct dnet_config *);
 void dnet_indexes_cleanup(struct dnet_node *);
 int dnet_process_indexes(struct dnet_net_state *st, struct dnet_cmd *cmd, void *data);
+
+int dnet_ids_update(int update_local, const char *file, struct dnet_addr *cfg_addrs, char *remotes);
 
 int __attribute__((weak)) dnet_remove_local(struct dnet_node *n, struct dnet_id *id);
 int __attribute__((weak)) dnet_cas_local(struct dnet_node *n, struct dnet_id *id, void *csum, int csize);
@@ -870,7 +882,7 @@ static inline void dnet_version_decode(struct dnet_id *id, int version[4])
 		version[i] = dnet_bswap32(ids[i]);
 }
 
-static inline int dnet_version_compare(struct dnet_net_state *st, int *version)
+static inline int dnet_version_check(struct dnet_net_state *st, int *version)
 {
 	struct dnet_node *n = st->n;
 	int err = 0;
@@ -908,6 +920,12 @@ static inline void dnet_indexes_shard_count_decode(struct dnet_id *id, int *coun
     *count = dnet_bswap32(data[5]);
 }
 
+static inline int dnet_empty_addr(struct dnet_addr *addr)
+{
+	static struct dnet_addr __empty;
+
+	return memcmp(addr, &__empty, addr->addr_len) == 0;
+}
 
 #ifdef __cplusplus
 }

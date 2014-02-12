@@ -5,14 +5,14 @@
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
+ * it under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  */
 
 #ifndef ELLIPTICS_SESSION_HPP
@@ -142,26 +142,25 @@ class session_data;
 class node
 {
 	public:
+		node();
+		explicit node(const std::shared_ptr<node_data> &data);
 		explicit node(const logger &l);
 		node(const logger &l, struct dnet_config &cfg);
-		node(const logger &l, const std::string &config_path);
 		node(const node &other);
 		~node();
 
 		node &operator =(const node &other);
-
-		void			parse_config(const std::string &path, struct dnet_config &cfg,
-							std::list<address> &remotes,
-							std::vector<int> &groups,
-							int &log_level);
 
 		void			add_remote(const char *addr, const int port, const int family = AF_INET);
 		void			add_remote(const char *addr);
 
 		void			set_timeouts(const int wait_timeout, const int check_timeout);
 
+		bool is_valid() const;
+
 		logger get_log() const;
 		struct dnet_node *	get_native();
+		struct dnet_node *	get_native() const;
 
 	protected:
 		std::shared_ptr<node_data> m_data;
@@ -194,7 +193,7 @@ class key
 		void set_id(const dnet_raw_id &id);
 		void set_group_id(uint32_t group);
 
-		void transform(session &sess);
+		void transform(const session &sess);
 
 		void set_trace_id(uint32_t trace_id) { m_trace_id = trace_id; }
 		uint32_t get_trace_id() { return m_trace_id; }
@@ -231,19 +230,19 @@ class session
 		/*!
 		 * Converts string \a data to dnet_id \a id.
 		 */
-		void			transform(const std::string &data, struct dnet_id &id);
+		void			transform(const std::string &data, struct dnet_id &id) const;
 		/*!
 		 * Converts string \a data to dnet_raw_id \a id.
 		 */
-		void			transform(const std::string &data, struct dnet_raw_id &id);
+		void			transform(const std::string &data, struct dnet_raw_id &id) const;
 		/*!
 		 * \overload transform()
 		 */
-		void			transform(const data_pointer &data, struct dnet_id &id);
+		void			transform(const data_pointer &data, struct dnet_id &id) const;
 		/*!
 		 * Makes dnet_id be accessible by key::id() in the key \a id.
 		 */
-		void			transform(const key &id);
+		void			transform(const key &id) const;
 
 		/*!
 		 * Sets \a groups to the session.
@@ -276,7 +275,7 @@ class session
 		 */
 		result_checker		get_checker() const;
 
-		void            set_error_handler(const result_error_handler &error_handler);
+		void			set_error_handler(const result_error_handler &error_handler);
 		result_error_handler	get_error_handler() const;
 
 		/*!
@@ -473,30 +472,37 @@ class session
 		async_write_result write_cas(const key &id, const data_pointer &file, const struct dnet_id &old_csum, uint64_t remote_offset);
 
 		/*!
-		 * Prepares place to write data \a file by the key \a id and
-		 * remote offset \a remote_offset.
+		 * Prepares \a psize bytes place to write data by \a id and writes data by \a file and by \a remote_offset
 		 *
 		 * Returns async_write_result.
 		 *
-		 * \note No data is really written.
+		 * \note Server marks the object by \a id as incomplete and inaccessible until write_commit is called.
+		 *       psize is amount of bytes which server should prepare for future object.
+		 *       If you about to write data by offset, then psize should defines final size of full object
+		 *       rather then expecting that server reserves psize bytes after remote_offset of current object.
 		 */
 		async_write_result write_prepare(const key &id, const data_pointer &file, uint64_t remote_offset, uint64_t psize);
 
 		/*!
-		 * Writes data \a file by the key \a id and remote offset \a remote_offset.
+		 * Writes data \a file by the key \a id and remote offset \a remote_offset in prepared place.
 		 *
 		 * Returns async_write_result.
 		 *
-		 * \note Indexes are not updated. Data is not accessible for reading.
+		 * \note Server writes data by offset in prepared place and
+		 *       remains \a id as incomplete and inaccessible until write_commit is called.
+		 *       While write_plain data shouldn't go out of prepared place.
 		 */
 		async_write_result write_plain(const key &id, const data_pointer &file, uint64_t remote_offset);
 
 		/*!
-		 * Commites data \a file by the key \a id and remote offset \a remote_offset.
+		 * Writes data \a file by the key \a id and remote offset \a remote_offset and commit key \a id data by \a csize.
 		 *
 		 * Returns async_write_result.
 		 *
-		 * \note Indexes are updated. Data becomes accessible for reading.
+		 * \note Server last writes data by offset in prepared place, commits all data and truncates it by csize.
+		 *       After commit server marks the object by \a id as complete and it becomes accessible.
+		 *       csize could be less then prepared place size. In this case object will be truncated by csize.
+		 *       But csize shouldn't be more then size of prepared place.
 		 */
 		async_write_result write_commit(const key &id, const data_pointer &file, uint64_t remote_offset, uint64_t csize);
 
@@ -593,7 +599,7 @@ class session
 		 *
 		 * Returns async_read_result.
 		 */
-		async_read_result remove_data_range(struct dnet_io_attr &io, int group_id);
+		async_read_result remove_data_range(const struct dnet_io_attr &io, int group_id);
 
 		/*!
 		 * Returns the list of network routes.
@@ -707,9 +713,17 @@ class session
 		async_set_indexes_result update_indexes(const key &id, const std::vector<index_entry> &indexes);
 		async_set_indexes_result update_indexes(const key &id, const std::vector<std::string> &indexes,
 				const std::vector<data_pointer> &data);
+		async_set_indexes_result remove_indexes(const key &id, const std::vector<dnet_raw_id> &indexes);
+		async_set_indexes_result remove_indexes(const key &id, const std::vector<std::string> &indexes);
 		async_set_indexes_result update_indexes_internal(const key &id, const std::vector<index_entry> &indexes);
 		async_set_indexes_result update_indexes_internal(const key &id, const std::vector<std::string> &indexes,
 				const std::vector<data_pointer> &data);
+		async_set_indexes_result remove_indexes_internal(const key &id, const std::vector<dnet_raw_id> &indexes);
+		async_set_indexes_result remove_indexes_internal(const key &id, const std::vector<std::string> &indexes);
+		async_generic_result remove_index_internal(const dnet_raw_id &id);
+		async_generic_result remove_index_internal(const std::string &id);
+		async_generic_result remove_index(const dnet_raw_id &id, bool remove_data);
+		async_generic_result remove_index(const std::string &id, bool remove_data);
 
 		async_find_indexes_result find_all_indexes(const std::vector<dnet_raw_id> &indexes);
 		async_find_indexes_result find_all_indexes(const std::vector<std::string> &indexes);
@@ -719,13 +733,17 @@ class session
 		async_list_indexes_result list_indexes(const key &id);
 
 		/*!
+		 * Returns logger object.
+		 */
+		logger get_logger() const;
+		/*!
 		 * Returns reference to parent node.
 		 */
-		node	&get_node();
+		node	get_node() const;
 		/*!
-		 * \overload get_node()
+		 * Returns reference to parent node.
 		 */
-		const node	&get_node() const;
+		dnet_node *get_native_node() const;
 		/*!
 		 * Returns pointer to dnet_session.
 		 */
@@ -736,6 +754,7 @@ class session
 
 		async_exec_result request(dnet_id *id, const exec_context &context);
 		async_iterator_result iterator(const key &id, const data_pointer& request);
+		async_find_indexes_result find_indexes_internal(const std::vector<dnet_raw_id> &indexes, bool intersect);
 
 		void			mix_states(const key &id, std::vector<int> &groups);
 		void			mix_states(std::vector<int> &groups);

@@ -1,481 +1,48 @@
 /*
  * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
+ * 2013+ Copyright (c) Ruslan Nigmatullin <euroelessar@yandex.ru>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
+ * it under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  */
 
-#include <sys/time.h>
-#include <sys/resource.h>
+#include "test_base.hpp"
+#include <algorithm>
 
-#include <cerrno>
-#include <cstdarg>
-#include <cstring>
-#include <cassert>
-
-#include <sstream>
-#include <fstream>
-#include <set>
-#include <iostream>
-
-#include <boost/filesystem.hpp>
-
-#define BOOST_TEST_DYN_LINK
+#define BOOST_TEST_NO_MAIN
 #include <boost/test/included/unit_test.hpp>
 
-#include "../../include/elliptics/cppdef.h"
-#include "../../example/common.h"
-
-#include <algorithm>
+#include <boost/program_options.hpp>
 
 using namespace ioremap::elliptics;
 using namespace boost::unit_test;
 
 namespace tests {
 
-#define ELLIPTICS_CHECK_IMPL(R, C, CMD) auto R = (C); \
-	R.wait(); \
-	{ \
-		auto base_message = BOOST_TEST_STRINGIZE(C); \
-		std::string message(base_message.begin(), base_message.end()); \
-		message += ", err: \""; \
-		message += R.error().message(); \
-		message += "\""; \
-		CMD(!R.error(), message); \
-	}
+static std::shared_ptr<nodes_data> global_data;
 
-#define ELLIPTICS_CHECK_ERROR_IMPL(R, C, E, CMD) auto R = (C); \
-	R.wait(); \
-	if (R.error().code() != (E)) { \
-		auto base_message = BOOST_TEST_STRINGIZE(C); \
-		std::stringstream out; \
-		out << std::string(base_message.begin(), base_message.end()) \
-			<< ", expected error: " << (E) << ", received: \"" << R.error().message() << "\""; \
-		CMD(false, out.str()); \
-	}
-
-#define ELLIPTICS_WARN(R, C) ELLIPTICS_CHECK_IMPL(R, (C), BOOST_WARN_MESSAGE)
-#define ELLIPTICS_CHECK(R, C) ELLIPTICS_CHECK_IMPL(R, (C), BOOST_CHECK_MESSAGE)
-#define ELLIPTICS_REQUIRE(R, C) ELLIPTICS_CHECK_IMPL(R, (C), BOOST_REQUIRE_MESSAGE)
-
-#define ELLIPTICS_WARN_ERROR(R, C, E) ELLIPTICS_CHECK_ERROR_IMPL(R, (C), (E), BOOST_WARN_MESSAGE)
-#define ELLIPTICS_CHECK_ERROR(R, C, E) ELLIPTICS_CHECK_ERROR_IMPL(R, (C), (E), BOOST_CHECK_MESSAGE)
-#define ELLIPTICS_REQUIRE_ERROR(R, C, E) ELLIPTICS_CHECK_ERROR_IMPL(R, (C), (E), BOOST_REQUIRE_MESSAGE)
-
-#define ELLIPTICS_TEST_CASE(M, C...) do { framework::master_test_suite().add(BOOST_TEST_CASE(std::bind( M, ##C ))); } while (false)
-
-session create_session(node n, std::initializer_list<int> groups, uint64_t cflags, uint32_t ioflags)
+static void configure_nodes(const std::vector<std::string> &remotes, const std::string &path)
 {
-	session sess(n);
-
-	sess.set_groups(std::vector<int>(groups));
-	sess.set_cflags(cflags);
-	sess.set_ioflags(ioflags);
-
-	sess.set_exceptions_policy(session::no_exceptions);
-
-	return sess;
-}
-
-class directory_handler
-{
-public:
-	directory_handler()
-	{
-	}
-
-	directory_handler(const std::string &path) : m_path(path)
-	{
-	}
-
-	directory_handler(directory_handler &&other) : m_path(other.m_path)
-	{
-		other.m_path.clear();
-	}
-
-	directory_handler &operator= (directory_handler &&other)
-	{
-		std::swap(m_path, other.m_path);
-
-		return *this;
-	}
-
-	~directory_handler()
-	{
-		if (!m_path.empty())
-			boost::filesystem::remove_all(m_path);
-	}
-
-	directory_handler(const directory_handler &) = delete;
-	directory_handler &operator =(const directory_handler &) = delete;
-
-private:
-	std::string m_path;
-};
-
-void create_directory(const std::string &path)
-{
-	// Boost throws exception on fail
-	boost::filesystem::create_directory(path);
-}
-
-enum dummy_value_type { DUMMY_VALUE };
-
-class config_data
-{
-public:
-	config_data()
-	{
-	}
-
-	config_data &operator() (const std::string &name, const std::string &value)
-	{
-		for (auto it = m_data.begin(); it != m_data.end(); ++it) {
-			if (it->first == name) {
-				it->second = value;
-				return *this;
-			}
-		}
-
-		m_data.emplace_back(name, value);
-
-		return *this;
-	}
-
-	config_data &operator() (const std::string &name, int value)
-	{
-		return (*this)(name, boost::lexical_cast<std::string>(value));
-	}
-
-	config_data &operator() (const std::string &name, dummy_value_type)
-	{
-		return (*this)(name, "dummy-value");
-	}
-
-protected:
-	std::vector<std::pair<std::string, std::string> >  m_data;
-};
-
-class config_data_writer : public config_data
-{
-public:
-	config_data_writer() = delete;
-	config_data_writer &operator =(const config_data_writer &other) = delete;
-
-	config_data_writer(const config_data_writer &other)
-		: config_data(other), m_path(other.m_path)
-	{
-	}
-	config_data_writer(const config_data &other, const std::string &path)
-		: config_data(other), m_path(path)
-	{
-	}
-
-	~config_data_writer()
-	{
-		write();
-	}
-
-	template <typename T>
-	config_data_writer &operator() (const std::string &name, const T &value)
-	{
-		config_data::operator ()(name, value);
-
-		return *this;
-	}
-
-	dnet_node *run()
-	{
-		dnet_node *node = dnet_parse_config(m_path.c_str(), 0);
-		if (!node)
-			throw std::runtime_error("Can not start server with config file: \"" + m_path + "\"");
-
-		return node;
-	}
-
-	void write()
-	{
-		std::ofstream out;
-		out.open(m_path.c_str());
-
-		if (!out) {
-			throw std::runtime_error("Can not open file \"" + m_path + "\" for writing");
-		}
-
-		for (auto it = m_data.begin(); it != m_data.end(); ++it) {
-			if (it->second == "dummy-value")
-				throw std::runtime_error("Unset value for key \"" + it->first + "\", file: \"" + m_path + "\"");
-
-			out << it->first << " = " << it->second << std::endl;
-		}
-
-		out.flush();
-		out.close();
-	}
-private:
-
-	std::string m_path;
-};
-
-class server_node
-{
-public:
-	server_node() : m_node(NULL)
-	{
-	}
-
-	server_node(const std::string &path) : m_node(NULL), m_path(path)
-	{
-	}
-
-	server_node(server_node &&other) : m_node(other.m_node), m_path(other.m_path)
-	{
-		other.m_node = NULL;
-		other.m_path.clear();
-	}
-
-	server_node &operator =(server_node &&other)
-	{
-		std::swap(m_node, other.m_node);
-		std::swap(m_path, other.m_path);
-
-		return *this;
-	}
-
-	server_node(const server_node &other) = delete;
-	server_node &operator =(const server_node &other) = delete;
-
-	~server_node()
-	{
-		if (m_node)
-			stop();
-	}
-
-	void start()
-	{
-		if (m_node)
-			throw std::runtime_error("Server node \"" + m_path + "\" is already started");
-
-		m_node = dnet_parse_config(m_path.c_str(), 0);
-		if (!m_node)
-			throw std::runtime_error("Can not start server with config file: \"" + m_path + "\"");
-	}
-
-	void stop()
-	{
-		if (!m_node)
-			throw std::runtime_error("Server node \"" + m_path + "\" is already stoped");
-
-		dnet_set_need_exit(m_node);
-		while (!dnet_need_exit(m_node))
-			sleep(1);
-
-		dnet_server_node_destroy(m_node);
-		m_node = NULL;
-	}
-
-private:
-	dnet_node *m_node;
-	std::string m_path;
-};
-
-struct tests_data
-{
-	~tests_data()
-	{
-		nodes.clear();
-	}
-
-	std::vector<server_node> nodes;
-	directory_handler directory;
-};
-
-static std::shared_ptr<tests_data> global_data;
-
-static config_data_writer create_config(config_data base_config, const std::string &path)
-{
-	return config_data_writer(base_config, path);
-}
-
-static void configure_server_nodes()
-{
-	std::string base_path;
-	std::string auth_cookie;
-
-	{
-		char buffer[1024];
-
-		snprintf(buffer, sizeof(buffer), "/tmp/elliptics-test-%04x/", rand());
-		buffer[sizeof(buffer) - 1] = 0;
-		base_path = buffer;
-
-		snprintf(buffer, sizeof(buffer), "%04x%04x", rand(), rand());
-		buffer[sizeof(buffer) - 1] = 0;
-		auth_cookie = buffer;
-	}
-
-	create_directory(base_path);
-
-	directory_handler guard(base_path);
-
-	results_reporter::get_stream() << "Set base directory: \"" << base_path << "\"" << std::endl;
-	results_reporter::get_stream() << "Starting up servers" << std::endl;
-
-	const std::string first_server_path = base_path + "/server-1";
-	const std::string second_server_path = base_path + "/server-2";
-
-	create_directory(first_server_path);
-	create_directory(first_server_path + "/blob");
-	create_directory(first_server_path + "/history");
-	create_directory(second_server_path);
-	create_directory(second_server_path + "/blob");
-	create_directory(second_server_path + "/history");
-
-	config_data ioserv_config;
-
-	ioserv_config("log", "/dev/stderr")
-			("log_level", DNET_LOG_INFO)
-			("join", 1)
-			("flags", 4)
-			("group", DUMMY_VALUE)
-			("addr", DUMMY_VALUE)
-			("remote", DUMMY_VALUE)
-			("wait_timeout", 60)
-			("check_timeout", 60)
-			("io_thread_num", 50)
-			("nonblocking_io_thread_num", 16)
-			("net_thread_num", 16)
-			("history", DUMMY_VALUE)
-			("daemon", 0)
-			("auth_cookie", auth_cookie)
-			("bg_ionice_class", 3)
-			("bg_ionice_prio", 0)
-			("server_net_prio", 1)
-			("client_net_prio", 6)
-			("cache_size", 1024 * 1024 * 256)
-			("backend", "blob")
-			("sync", 5)
-			("data", DUMMY_VALUE)
-			("data_block_size", 1024)
-			("blob_flags", 6)
-			("iterate_thread_num", 1)
-			("blob_size", "10M")
-			("records_in_blob", 10000000)
-			("defrag_timeout", 3600)
-			("defrag_percentage", 25)
-			;
-
-	create_config(ioserv_config, first_server_path + "/ioserv.conf")
-			("log", first_server_path + "/log.log")
-			("group", 1)
-			("addr", "localhost:1025:2")
-			("remote", "localhost:1026:2")
-			("history", first_server_path + "/history")
-			("data", first_server_path + "/blob/data")
-			;
-
-	server_node first_server(first_server_path + "/ioserv.conf");
-
-	first_server.start();
-	results_reporter::get_stream() << "First server started" << std::endl;
-
-	create_config(ioserv_config, second_server_path + "/ioserv.conf")
-			("log", second_server_path + "/log.log")
-			("group", 2)
-			("addr", "localhost:1026:2")
-			("remote", "localhost:1025:2")
-			("history", second_server_path + "/history")
-			("data", second_server_path + "/blob/data")
-			;
-
-	server_node second_server(second_server_path + "/ioserv.conf");
-
-	second_server.start();
-	results_reporter::get_stream() << "Second server started" << std::endl;
-
-	global_data = std::make_shared<tests_data>();
-
-	global_data->directory = std::move(guard);
-	global_data->nodes.emplace_back(std::move(first_server));
-	global_data->nodes.emplace_back(std::move(second_server));
-}
-
-static void test_write(session &sess, const std::string &id, const std::string &data)
-{
-	ELLIPTICS_REQUIRE(write_result, sess.write_data(id, data, 0));
-	ELLIPTICS_REQUIRE(read_result, sess.read_data(id, 0, 0));
-	read_result_entry result = read_result.get_one();
-
-	BOOST_REQUIRE_EQUAL(result.file().to_string(), data);
-}
-
-static void test_recovery(session &sess, const std::string &id, const std::string &data)
-{
-	std::vector<int> groups = sess.get_groups();
-	std::vector<int> valid_groups(1, groups.back());
-
-	sess.set_groups(valid_groups);
-
-	ELLIPTICS_REQUIRE(write_result, sess.write_data(id, data, 0));
-	ELLIPTICS_REQUIRE(recovery_read_result, sess.read_data(id, groups, 0, 0));
-
-	for (size_t i = 0; i < groups.size(); ++i) {
-		std::vector<int> current_groups(1, groups[i]);
-		ELLIPTICS_CHECK(read_result, sess.read_data(id, current_groups, 0, 0));
-		read_result_entry result = read_result.get_one();
-		if (result.is_valid()) {
-			BOOST_CHECK_EQUAL(result.file().to_string(), data);
-			BOOST_CHECK_EQUAL(result.command()->id.group_id, groups[i]);
-		}
-	}
-}
-
-static void test_indexes(session &sess)
-{
-	std::vector<std::string> indexes = {
-		"fast",
-		"elliptics",
-		"distributive",
-		"reliable",
-		"falt-tolerante"
-	};
-
-	std::vector<data_pointer> data(indexes.size());
-
-	std::string key = "elliptics";
-
-	ELLIPTICS_REQUIRE(clear_indexes_result, sess.set_indexes(key, std::vector<std::string>(), std::vector<data_pointer>()));
-	ELLIPTICS_REQUIRE(set_indexes_result, sess.set_indexes(key, indexes, data));
-
-	ELLIPTICS_REQUIRE(all_indexes_result, sess.find_all_indexes(indexes));
-	sync_find_indexes_result all_result = all_indexes_result.get();
-
-	ELLIPTICS_REQUIRE(any_indexes_result, sess.find_any_indexes(indexes));
-	sync_find_indexes_result any_result = any_indexes_result.get();
-
-	BOOST_CHECK_EQUAL(all_result.size(), any_result.size());
-	BOOST_CHECK_EQUAL(all_result.size(), 1);
-	BOOST_CHECK_EQUAL(all_result[0].indexes.size(), any_result[0].indexes.size());
-	BOOST_CHECK_EQUAL(all_result[0].indexes.size(), indexes.size());
-}
-
-static void test_error(session &s, const std::string &id, int err)
-{
-	ELLIPTICS_REQUIRE_ERROR(read_result, s.read_data(id, 0, 0), err);
-}
-
-static void test_remove(session &s, const std::string &id)
-{
-	ELLIPTICS_REQUIRE(remove_result, s.remove(id));
-	ELLIPTICS_REQUIRE_ERROR(read_result, s.read_data(id, 0, 0), -ENOENT);
+#ifndef NO_SERVER
+	if (remotes.empty()) {
+		global_data = start_nodes(results_reporter::get_stream(), std::vector<config_data>({
+			config_data::default_value()
+				("group", 1),
+
+			config_data::default_value()
+				("group", 2)
+		}), path);
+	} else
+#endif // NO_SERVER
+		global_data = start_nodes(results_reporter::get_stream(), remotes, path);
 }
 
 static void test_cache_write(session &sess, int num)
@@ -549,6 +116,189 @@ static void test_cache_delete(session &sess, int num, int percentage)
 		ELLIPTICS_REQUIRE(remove_result, sess.remove(id));
 		ELLIPTICS_REQUIRE_ERROR(read_result, sess.read_data(id, 0, 0), -ENOENT);
 	}
+}
+
+static void test_cache_and_no(session &sess, const std::string &id)
+{
+	const std::string first_part = "first part";
+	const std::string second_part = " | second part";
+	const std::string third_path = " | third part";
+
+	session cache_sess = sess.clone();
+	cache_sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_APPEND);
+
+	ELLIPTICS_REQUIRE(first_write_result, sess.write_data(id, first_part, 0));
+	ELLIPTICS_COMPARE_REQUIRE(first_read_result, sess.read_data(id, 0, 0), first_part);
+
+	ELLIPTICS_REQUIRE(second_write_result, cache_sess.write_data(id, second_part, 0));
+	ELLIPTICS_COMPARE_REQUIRE(second_read_result, cache_sess.read_data(id, 0, 0), first_part + second_part);
+
+	sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_APPEND);
+
+	ELLIPTICS_REQUIRE(third_write_result, sess.write_data(id, third_path, 0));
+	ELLIPTICS_COMPARE_REQUIRE(third_read_result, sess.read_data(id, 0, 0), first_part + second_part + third_path);
+	ELLIPTICS_COMPARE_REQUIRE(third_cache_read_result, cache_sess.read_data(id, 0, 0), first_part + second_part + third_path);
+}
+
+static void test_cache_populating(session &sess, const std::string &id, const std::string &data)
+{
+	session cache_sess = sess.clone();
+	cache_sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_CACHE);
+
+	session cache_only_sess = sess.clone();
+	cache_only_sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY);
+
+	ELLIPTICS_REQUIRE(write_result, sess.write_data(id, data, 0));
+	ELLIPTICS_COMPARE_REQUIRE(read_result, sess.read_data(id, 0, 0), data);
+
+	ELLIPTICS_REQUIRE_ERROR(read_cache_only_result, cache_only_sess.read_data(id, 0, 0), -ENOENT);
+	ELLIPTICS_COMPARE_REQUIRE(read_cache_result, cache_sess.read_data(id, 0, 0), data);
+	ELLIPTICS_COMPARE_REQUIRE(read_cache_only_populated_result, cache_only_sess.read_data(id, 0, 0), data);
+}
+
+static void test_write(session &sess, const std::string &id, const std::string &data)
+{
+	ELLIPTICS_REQUIRE(write_result, sess.write_data(id, data, 0));
+	ELLIPTICS_REQUIRE(read_result, sess.read_data(id, 0, 0));
+	read_result_entry result = read_result.get_one();
+
+	BOOST_REQUIRE_EQUAL(result.file().to_string(), data);
+}
+
+static void test_recovery(session &sess, const std::string &id, const std::string &data)
+{
+	std::vector<int> groups = sess.get_groups();
+	std::vector<int> valid_groups(1, groups.back());
+
+	sess.set_groups(valid_groups);
+
+	ELLIPTICS_REQUIRE(write_result, sess.write_data(id, data, 0));
+	ELLIPTICS_REQUIRE(recovery_read_result, sess.read_data(id, groups, 0, 0));
+
+	for (size_t i = 0; i < groups.size(); ++i) {
+		std::vector<int> current_groups(1, groups[i]);
+		ELLIPTICS_CHECK(read_result, sess.read_data(id, current_groups, 0, 0));
+		read_result_entry result = read_result.get_one();
+		if (result.is_valid()) {
+			BOOST_CHECK_EQUAL(result.file().to_string(), data);
+			BOOST_CHECK_EQUAL(result.command()->id.group_id, groups[i]);
+		}
+	}
+}
+
+static void test_indexes(session &sess)
+{
+	std::vector<std::string> indexes = {
+		"fast",
+		"elliptics",
+		"distributive",
+		"reliable",
+		"falt-tolerante"
+	};
+
+	std::vector<data_pointer> data(indexes.size());
+
+	std::string key = "elliptics";
+
+	ELLIPTICS_REQUIRE(clear_indexes_result, sess.set_indexes(key, std::vector<std::string>(), std::vector<data_pointer>()));
+	ELLIPTICS_REQUIRE(set_indexes_result, sess.set_indexes(key, indexes, data));
+
+	ELLIPTICS_REQUIRE(all_indexes_result, sess.find_all_indexes(indexes));
+	sync_find_indexes_result all_result = all_indexes_result.get();
+
+	ELLIPTICS_REQUIRE(any_indexes_result, sess.find_any_indexes(indexes));
+	sync_find_indexes_result any_result = any_indexes_result.get();
+
+	BOOST_CHECK_EQUAL(all_result.size(), any_result.size());
+	BOOST_CHECK_EQUAL(all_result.size(), 1);
+	BOOST_CHECK_EQUAL(all_result[0].indexes.size(), any_result[0].indexes.size());
+	BOOST_CHECK_EQUAL(all_result[0].indexes.size(), indexes.size());
+}
+
+static void test_more_indexes(session &sess)
+{
+	std::vector<std::string> indexes;
+	for (size_t i = 0; i < 16; ++i) {
+		indexes.push_back("index-" + boost::lexical_cast<std::string>(i));
+	}
+
+	std::vector<data_pointer> data(indexes.size());
+
+	std::vector<std::string> keys;
+	for (size_t i = 0; i < 256; ++i) {
+		keys.push_back("key-" + boost::lexical_cast<std::string>(i));
+	}
+
+	for (auto it = keys.begin(); it != keys.end(); ++it) {
+		std::string key = *it;
+		ELLIPTICS_REQUIRE(clear_indexes_result, sess.set_indexes(key, std::vector<std::string>(), std::vector<data_pointer>()));
+		ELLIPTICS_REQUIRE(set_indexes_result, sess.set_indexes(key, indexes, data));
+	}
+
+	ELLIPTICS_REQUIRE(all_indexes_result, sess.find_all_indexes(indexes));
+	sync_find_indexes_result all_result = all_indexes_result.get();
+
+	ELLIPTICS_REQUIRE(any_indexes_result, sess.find_any_indexes(indexes));
+	sync_find_indexes_result any_result = any_indexes_result.get();
+
+	BOOST_CHECK_EQUAL(all_result.size(), any_result.size());
+	BOOST_CHECK_EQUAL(all_result.size(), 256);
+	BOOST_CHECK_EQUAL(all_result[0].indexes.size(), any_result[0].indexes.size());
+	BOOST_CHECK_EQUAL(all_result[0].indexes.size(), indexes.size());
+}
+
+static void test_error(session &s, const std::string &id, int err)
+{
+	ELLIPTICS_REQUIRE_ERROR(read_result, s.read_data(id, 0, 0), err);
+}
+
+static bool test_error_check_exception(const not_found_error &e)
+{
+	return e.error_message()
+			.find("entry::io_attribute(): data.size is too small, expected: 208, actual: 0, status: -2")
+			!= std::string::npos;
+}
+
+static void test_error_message(session &s, const std::string &id, int err)
+{
+	s.set_filter(filters::all);
+
+	ELLIPTICS_REQUIRE_ERROR(read_result, s.read_data(id, 0, 0), err);
+
+	sync_read_result sync_result = read_result.get();
+
+	BOOST_REQUIRE(sync_result.size() > 0);
+
+	read_result_entry entry = sync_result[0];
+
+	BOOST_REQUIRE_EXCEPTION(entry.io_attribute(), not_found_error, test_error_check_exception);
+}
+
+static bool test_error_null_message_check_exception_1(const not_found_error &e)
+{
+	return e.error_message()
+			.find("entry::command(): entry is null")
+			!= std::string::npos;
+}
+
+static bool test_error_null_message_check_exception_2(const not_found_error &e)
+{
+	return e.error_message()
+			.find("entry::io_attribute(): entry is null")
+			!= std::string::npos;
+}
+
+static void test_error_null_message(session &)
+{
+	read_result_entry entry;
+	BOOST_REQUIRE_EXCEPTION(entry.command(), not_found_error, test_error_null_message_check_exception_1);
+	BOOST_REQUIRE_EXCEPTION(entry.io_attribute(), not_found_error, test_error_null_message_check_exception_2);
+}
+
+static void test_remove(session &s, const std::string &id)
+{
+	ELLIPTICS_REQUIRE(remove_result, s.remove(id));
+	ELLIPTICS_REQUIRE_ERROR(read_result, s.read_data(id, 0, 0), -ENOENT);
 }
 
 static void test_cas(session &sess)
@@ -902,50 +652,6 @@ static void test_range_request(session &sess, int limit_start, int limit_num, in
 	BOOST_REQUIRE_EQUAL(removed_fail, 0);
 }
 
-#define ELLIPTICS_COMPARE_REQUIRE(R, C, D) ELLIPTICS_REQUIRE(R, C); \
-	do { \
-		auto R ## _result = (R).get_one(); \
-		BOOST_REQUIRE_EQUAL((R ## _result).file().to_string(), (D)); \
-	} while (0)
-
-static void test_cache_and_no(session &sess, const std::string &id)
-{
-	const std::string first_part = "first part";
-	const std::string second_part = " | second part";
-	const std::string third_path = " | third part";
-
-	session cache_sess = sess.clone();
-	cache_sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_APPEND);
-
-	ELLIPTICS_REQUIRE(first_write_result, sess.write_data(id, first_part, 0));
-	ELLIPTICS_COMPARE_REQUIRE(first_read_result, sess.read_data(id, 0, 0), first_part);
-
-	ELLIPTICS_REQUIRE(second_write_result, cache_sess.write_data(id, second_part, 0));
-	ELLIPTICS_COMPARE_REQUIRE(second_read_result, cache_sess.read_data(id, 0, 0), first_part + second_part);
-
-	sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_APPEND);
-
-	ELLIPTICS_REQUIRE(third_write_result, sess.write_data(id, third_path, 0));
-	ELLIPTICS_COMPARE_REQUIRE(third_read_result, sess.read_data(id, 0, 0), first_part + second_part + third_path);
-	ELLIPTICS_COMPARE_REQUIRE(third_cache_read_result, cache_sess.read_data(id, 0, 0), first_part + second_part + third_path);
-}
-
-static void test_cache_populating(session &sess, const std::string &id, const std::string &data)
-{
-	session cache_sess = sess.clone();
-	cache_sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_CACHE);
-
-	session cache_only_sess = sess.clone();
-	cache_only_sess.set_ioflags(sess.get_ioflags() | DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY);
-
-	ELLIPTICS_REQUIRE(write_result, sess.write_data(id, data, 0));
-	ELLIPTICS_COMPARE_REQUIRE(read_result, sess.read_data(id, 0, 0), data);
-
-	ELLIPTICS_REQUIRE_ERROR(read_cache_only_result, cache_only_sess.read_data(id, 0, 0), -ENOENT);
-	ELLIPTICS_COMPARE_REQUIRE(read_cache_result, cache_sess.read_data(id, 0, 0), data);
-	ELLIPTICS_COMPARE_REQUIRE(read_cache_only_populated_result, cache_only_sess.read_data(id, 0, 0), data);
-}
-
 static void test_metadata(session &sess, const std::string &id, const std::string &data)
 {
 	const uint64_t unique_flags = rand();
@@ -1017,6 +723,24 @@ static void test_indexes_update(session &sess)
 		"index_5"
 	};
 
+	std::vector<std::string> third_indexes = {
+		"index_4",
+		"index_5"
+	};
+
+	std::vector<std::string> fourth_indexes = {
+		"index_4"
+	};
+
+	std::vector<std::string> anti_fourth_indexes = {
+		"index_1",
+		"index_2",
+		"index_3",
+		"index_5"
+	};
+
+	std::string fifth_index = "index_5";
+
 	for (auto it = all_indexes.begin(); it != all_indexes.end(); ++it) {
 		key tmp_key(*it);
 		tmp_key.transform(sess);
@@ -1037,7 +761,7 @@ static void test_indexes_update(session &sess)
 
 	data.assign(second_indexes.size(), second_data);
 
-	ELLIPTICS_REQUIRE(update_indexes_result, sess.update_indexes_internal(first_key, second_indexes, data));
+	ELLIPTICS_REQUIRE(update_indexes_result, sess.update_indexes(first_key, second_indexes, data));
 	ELLIPTICS_REQUIRE(second_find_result, sess.find_any_indexes(all_indexes));
 
 	sync_find_indexes_result second_sync_find_result = second_find_result.get();
@@ -1060,6 +784,48 @@ static void test_indexes_update(session &sess)
 			BOOST_REQUIRE_EQUAL(entry.data.to_string(), second_data.to_string());
 		else
 			BOOST_REQUIRE_EQUAL(entry.data.to_string(), first_data.to_string());
+	}
+
+	ELLIPTICS_REQUIRE(remove_indexes_result, sess.remove_indexes(first_key, first_indexes));
+	ELLIPTICS_REQUIRE(third_find_result, sess.find_any_indexes(all_indexes));
+
+	sync_find_indexes_result third_sync_find_result = third_find_result.get();
+
+	BOOST_REQUIRE_EQUAL(third_sync_find_result.size(), 1);
+	BOOST_REQUIRE_EQUAL(third_sync_find_result[0].indexes.size(), 2);
+
+	for (auto it = third_sync_find_result[0].indexes.begin();
+		it != third_sync_find_result[0].indexes.end();
+		++it) {
+		const index_entry &entry = *it;
+
+		std::string id = mapper[entry.index];
+		auto first_it = std::find(first_indexes.begin(), first_indexes.end(), id);
+		auto third_it = std::find(third_indexes.begin(), third_indexes.end(), id);
+
+		BOOST_REQUIRE((first_it == first_indexes.end()) || (third_it != third_indexes.end()));
+		BOOST_REQUIRE_EQUAL(entry.data.to_string(), second_data.to_string());
+	}
+
+	ELLIPTICS_REQUIRE(remove_index_result, sess.remove_index_internal(fifth_index));
+	ELLIPTICS_REQUIRE(fourth_find_result, sess.find_any_indexes(all_indexes));
+
+	sync_find_indexes_result fourth_sync_find_result = fourth_find_result.get();
+
+	BOOST_REQUIRE_EQUAL(fourth_sync_find_result.size(), 1);
+	BOOST_REQUIRE_EQUAL(fourth_sync_find_result[0].indexes.size(), 1);
+
+	for (auto it = fourth_sync_find_result[0].indexes.begin();
+		it != fourth_sync_find_result[0].indexes.end();
+		++it) {
+		const index_entry &entry = *it;
+
+		std::string id = mapper[entry.index];
+		auto fourth_it = std::find(fourth_indexes.begin(), fourth_indexes.end(), id);
+		auto anti_fourth_it = std::find(anti_fourth_indexes.begin(), anti_fourth_indexes.end(), id);
+
+		BOOST_REQUIRE((fourth_it != first_indexes.end()) || (anti_fourth_it != anti_fourth_indexes.end()));
+		BOOST_REQUIRE_EQUAL(entry.data.to_string(), second_data.to_string());
 	}
 }
 
@@ -1112,18 +878,45 @@ static void test_prepare_latest(session &sess, const std::string &id)
 	BOOST_REQUIRE_EQUAL(lookup_result.size(), 2);
 }
 
-bool register_tests()
+static void test_partial_lookup(session &sess, const std::string &id)
 {
-	srand(time(0));
-	configure_server_nodes();
+	const std::string data = "some-data";
 
-	dnet_config config;
-	memset(&config, 0, sizeof(config));
+	session second_sess = sess.clone();
+	second_sess.set_groups(std::vector<int>(1, 2));
 
-	logger log(NULL);
-	node n(log);
-	n.add_remote("localhost", 1025);
+	sess.set_filter(filters::all);
 
+	dnet_raw_id raw_id;
+	sess.transform(id, raw_id);
+
+	dnet_io_attr io;
+	memset(&io, 0, sizeof(io));
+	dnet_current_time(&io.timestamp);
+	memcpy(io.id, raw_id.id, DNET_ID_SIZE);
+
+	ELLIPTICS_REQUIRE(second_write_result, second_sess.write_data(io, data));
+	ELLIPTICS_REQUIRE(lookup_result, sess.lookup(id));
+
+	auto sync_lookup_result = lookup_result.get();
+
+	BOOST_REQUIRE_EQUAL(sync_lookup_result.size(), 2);
+
+	BOOST_REQUIRE_EQUAL(sync_lookup_result[0].command()->id.group_id, 1);
+	BOOST_REQUIRE_EQUAL(sync_lookup_result[0].command()->status, -ENOENT);
+
+	BOOST_REQUIRE_EQUAL(sync_lookup_result[1].command()->id.group_id, 2);
+	BOOST_REQUIRE_EQUAL(sync_lookup_result[1].command()->status, 0);
+	BOOST_REQUIRE_EQUAL(sync_lookup_result[1].file_info()->size, data.size());
+}
+
+bool register_tests(test_suite *suite, node n)
+{
+	ELLIPTICS_TEST_CASE(test_cache_write, create_session(n, { 1, 2 }, 0, DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY), 1000);
+	ELLIPTICS_TEST_CASE(test_cache_read, create_session(n, { 1, 2 }, 0, DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY | DNET_IO_FLAGS_NOCSUM), 1000, 20);
+	ELLIPTICS_TEST_CASE(test_cache_delete, create_session(n, { 1, 2 }, 0, DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY), 1000, 20);
+	ELLIPTICS_TEST_CASE(test_cache_and_no, create_session(n, {1, 2}, 0, 0), "cache-and-no-key");
+	ELLIPTICS_TEST_CASE(test_cache_populating, create_session(n, {1, 2}, 0, 0), "cache-populated-key", "cache-data");
 	ELLIPTICS_TEST_CASE(test_write, create_session(n, {1, 2}, 0, DNET_IO_FLAGS_CACHE), "new-id", "new-data");
 	ELLIPTICS_TEST_CASE(test_write, create_session(n, {1, 2}, 0, DNET_IO_FLAGS_CACHE), "new-id", "new-data-long");
 	ELLIPTICS_TEST_CASE(test_write, create_session(n, {1, 2}, 0, DNET_IO_FLAGS_CACHE), "new-id", "short");
@@ -1134,10 +927,11 @@ bool register_tests()
 	ELLIPTICS_TEST_CASE(test_remove, create_session(n, {1, 2}, 0, 0), "new-id-real");
 	ELLIPTICS_TEST_CASE(test_recovery, create_session(n, {1, 2}, 0, 0), "recovery-id", "recovered-data");
 	ELLIPTICS_TEST_CASE(test_indexes, create_session(n, {1, 2}, 0, 0));
+	ELLIPTICS_TEST_CASE(test_more_indexes, create_session(n, {1, 2}, 0, 0));
 	ELLIPTICS_TEST_CASE(test_error, create_session(n, {99}, 0, 0), "non-existen-key", -ENXIO);
-	ELLIPTICS_TEST_CASE(test_cache_write, create_session(n, { 1, 2 }, 0, DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY), 1000);
-	ELLIPTICS_TEST_CASE(test_cache_read, create_session(n, { 1, 2 }, 0, DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY | DNET_IO_FLAGS_NOCSUM), 1000, 20);
-	ELLIPTICS_TEST_CASE(test_cache_delete, create_session(n, { 1, 2 }, 0, DNET_IO_FLAGS_CACHE | DNET_IO_FLAGS_CACHE_ONLY), 1000, 20);
+	ELLIPTICS_TEST_CASE(test_error, create_session(n, {1, 2}, 0, 0), "non-existen-key", -ENOENT);
+	ELLIPTICS_TEST_CASE(test_error_message, create_session(n, {1, 2}, 0, 0), "non-existen-key", -ENOENT);
+	ELLIPTICS_TEST_CASE(test_error_null_message, create_session(n, {}, 0, 0));
 	ELLIPTICS_TEST_CASE(test_lookup, create_session(n, {1, 2}, 0, 0), "2.xml", "lookup data");
 	ELLIPTICS_TEST_CASE(test_lookup, create_session(n, {1, 2}, 0, DNET_IO_FLAGS_CACHE), "cache-2.xml", "lookup data");
 	ELLIPTICS_TEST_CASE(test_cas, create_session(n, {1, 2}, 0, DNET_IO_FLAGS_CHECKSUM));
@@ -1153,21 +947,62 @@ bool register_tests()
 	ELLIPTICS_TEST_CASE(test_range_request, create_session(n, {2}, 0, 0), 0, 255, 2);
 	ELLIPTICS_TEST_CASE(test_range_request, create_session(n, {2}, 0, 0), 3, 14, 2);
 	ELLIPTICS_TEST_CASE(test_range_request, create_session(n, {2}, 0, 0), 7, 3, 2);
-	ELLIPTICS_TEST_CASE(test_cache_and_no, create_session(n, {1, 2}, 0, 0), "cache-and-no-key");
-	ELLIPTICS_TEST_CASE(test_cache_populating, create_session(n, {1, 2}, 0, 0), "cache-populated-key", "cache-data");
 	ELLIPTICS_TEST_CASE(test_metadata, create_session(n, {1, 2}, 0, 0), "metadata-key", "meta-data");
 	ELLIPTICS_TEST_CASE(test_partial_bulk_read, create_session(n, {1, 2, 3}, 0, 0));
 	ELLIPTICS_TEST_CASE(test_indexes_update, create_session(n, {2}, 0, 0));
 	ELLIPTICS_TEST_CASE(test_prepare_latest, create_session(n, {1, 2}, 0, 0), "prepare-latest-key");
+	ELLIPTICS_TEST_CASE(test_partial_lookup, create_session(n, {1, 2}, 0, 0), "partial-lookup-key");
 
 	return true;
+}
+
+static void destroy_global_data()
+{
+	global_data.reset();
+}
+
+boost::unit_test::test_suite *register_tests(int argc, char *argv[])
+{
+	namespace bpo = boost::program_options;
+
+	bpo::variables_map vm;
+	bpo::options_description generic("Test options");
+
+	std::vector<std::string> remotes;
+	std::string path;
+
+	generic.add_options()
+		("help", "This help message")
+		("remote", bpo::value(&remotes), "Remote elliptics server address")
+		("path", bpo::value(&path), "Path where to store everything")
+		 ;
+
+	bpo::store(bpo::parse_command_line(argc, argv, generic), vm);
+	bpo::notify(vm);
+
+#ifndef NO_SERVER
+	if (vm.count("help")) {
+#else
+	if (vm.count("help") || remote.empty()) {
+#endif
+		std::cerr << generic;
+		return NULL;
+	}
+
+	test_suite *suite = new test_suite("Local Test Suite");
+
+	configure_nodes(remotes, path);
+
+	register_tests(suite, *global_data->node);
+
+	return suite;
 }
 
 }
 
 int main(int argc, char *argv[])
 {
-	int result = unit_test_main(tests::register_tests, argc, argv);
-	tests::global_data.reset();
-	return result;
+	srand(time(0));
+	atexit(tests::destroy_global_data);
+	return unit_test_main(tests::register_tests, argc, argv);
 }

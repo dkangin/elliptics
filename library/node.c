@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ * 
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
+ * 
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <sys/stat.h>
@@ -553,6 +557,9 @@ struct dnet_node *dnet_node_create(struct dnet_config *cfg)
 	n->removal_delay = cfg->removal_delay;
 	n->flags = cfg->flags;
 	n->cache_size = cfg->cache_size;
+	n->caches_number = cfg->caches_number;
+	n->cache_pages_number = cfg->cache_pages_number;
+	n->cache_pages_proportions = cfg->cache_pages_proportions;
 	n->indexes_shard_count = cfg->indexes_shard_count;
 
 	if (!n->log)
@@ -561,7 +568,7 @@ struct dnet_node *dnet_node_create(struct dnet_config *cfg)
 	dnet_log(n, DNET_LOG_INFO, "Elliptics starts\n");
 
 	if (!n->wait_ts.tv_sec) {
-		n->wait_ts.tv_sec = 5;
+		n->wait_ts.tv_sec = DNET_DEFAULT_WAIT_TIMEOUT_SEC;
 		dnet_log(n, DNET_LOG_NOTICE, "Using default wait timeout (%ld seconds).\n",
 				n->wait_ts.tv_sec);
 	}
@@ -655,7 +662,6 @@ void dnet_node_cleanup_common_resources(struct dnet_node *n)
 		list_del(&it->reconnect_entry);
 		free(it);
 	}
-	dnet_counter_destroy(n);
 	pthread_mutex_destroy(&n->reconnect_lock);
 
 	dnet_wait_put(n->wait);
@@ -668,6 +674,7 @@ void dnet_node_destroy(struct dnet_node *n)
 	dnet_log(n, DNET_LOG_DEBUG, "Destroying node.\n");
 
 	dnet_node_cleanup_common_resources(n);
+	dnet_counter_destroy(n);
 
 	free(n);
 }
@@ -727,6 +734,7 @@ void dnet_session_destroy(struct dnet_session *s)
 	dnet_log(s->node, DNET_LOG_DEBUG, "Destroying session.\n");
 
 	free(s->groups);
+	free(s->ns);
 	free(s);
 }
 

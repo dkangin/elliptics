@@ -1,17 +1,18 @@
 /*
  * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
  * 2012+ Copyright (c) Ruslan Nigmatullin <euroelessar@yandex.ru>
+ * 2013+ Copyright (c) Kirill Smorodinnikov <shaitkir@gmail.com>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
+ * it under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  */
 
 #include "callback_p.h"
@@ -20,6 +21,8 @@
 #include <cerrno>
 #include <sstream>
 #include <functional>
+
+#include "node_p.hpp"
 
 extern __thread uint32_t trace_id;
 
@@ -261,7 +264,7 @@ bool negative(const callback_result_entry &entry)
 
 bool all(const callback_result_entry &entry)
 {
-	return !entry.data().empty();
+	return entry.status() != 0 || !entry.data().empty();
 }
 
 bool all_with_ack(const callback_result_entry &entry)
@@ -320,7 +323,7 @@ void none(const error_info &, const std::vector<dnet_cmd> &)
 }
 
 void remove_on_fail_impl(session &sess, const error_info &error, const std::vector<dnet_cmd> &statuses) {
-	logger log = sess.get_node().get_log();
+	logger log = sess.get_logger();
 
 	if (statuses.size() == 0) {
 		log.log(DNET_LOG_ERROR, "Unexpected empty statuses list at remove_on_fail_impl");
@@ -356,51 +359,38 @@ result_error_handler remove_on_fail(const session &sess)
 
 } // namespace error_handlers
 
-class session_data
+session_data::session_data(const node &n) : node_guard(n.m_data), logger(n.get_log())
 {
-	public:
-		session_data(const node &n) : node_guard(n)
-		{
-			session_ptr = dnet_session_create(node_guard.get_native());
-			if (!session_ptr)
-				throw std::bad_alloc();
-			filter = filters::positive;
-			checker = checkers::at_least_one;
-			error_handler = error_handlers::none;
-			policy = session::default_exceptions;
-			trace_id = 0;
-			::trace_id = 0;
-		}
+	session_ptr = dnet_session_create(n.get_native());
+	if (!session_ptr)
+		throw std::bad_alloc();
+	filter = filters::positive;
+	checker = checkers::at_least_one;
+	error_handler = error_handlers::none;
+	policy = session::default_exceptions;
+	trace_id = 0;
+	::trace_id = 0;
+}
 
-		session_data(const session_data &other)
-			: node_guard(other.node_guard),
-			filter(other.filter),
-			checker(other.checker),
-			error_handler(other.error_handler),
-			policy(other.policy),
-			trace_id(other.trace_id)
-		{
-			session_ptr = dnet_session_copy(other.session_ptr);
-			if (!session_ptr)
-				throw std::bad_alloc();
-			::trace_id = other.trace_id;
-		}
+session_data::session_data(const session_data &other)
+	: node_guard(other.node_guard),
+	  logger(other.logger),
+	  filter(other.filter),
+	  checker(other.checker),
+	  error_handler(other.error_handler),
+	  policy(other.policy),
+	  trace_id(other.trace_id)
+{
+	session_ptr = dnet_session_copy(other.session_ptr);
+	if (!session_ptr)
+		throw std::bad_alloc();
+	::trace_id = other.trace_id;
+}
 
-		~session_data()
-		{
-			dnet_session_destroy(session_ptr);
-		}
-
-
-
-		struct dnet_session	*session_ptr;
-		node			node_guard;
-		result_filter		filter;
-		result_checker		checker;
-		result_error_handler	error_handler;
-		uint32_t		policy;
-		uint32_t		trace_id;
-};
+session_data::~session_data()
+{
+	dnet_session_destroy(session_ptr);
+}
 
 session::session(const node &n) : m_data(std::make_shared<session_data>(n))
 {
@@ -787,7 +777,19 @@ async_lookup_result session::prepare_latest(const key &id, const std::vector<int
 			session session_copy = clone();
 
 			session_copy.set_groups(std::vector<int>(1, groups[i]));
-			lookup_results.emplace_back(std::move(session_copy.lookup(raw)));
+			try {
+				auto lookup_result = session_copy.lookup(raw);
+				lookup_results.emplace_back(std::move(lookup_result));
+			} catch (error &e) {
+				raw.group_id = groups[i];
+				auto logger = get_logger();
+				logger.print(DNET_LOG_ERROR, "%s: failed to lookup, err: %s", dnet_dump_id(&raw), e.error_message().c_str());
+			}
+		}
+
+		if (lookup_results.empty()) {
+			result_handler.complete(error_info());
+			return result;
 		}
 
 		auto tmp_result = aggregated(*this, lookup_results.begin(), lookup_results.end());
@@ -828,11 +830,11 @@ async_read_result session::read_latest(const key &id, uint64_t offset, uint64_t 
 {
 	async_read_result result(*this);
 	{
-		session_scope scope(*this);
-		set_filter(filters::positive);
-		set_checker(checkers::no_check);
+		session sess = clone();
+		sess.set_filter(filters::positive);
+		sess.set_checker(checkers::no_check);
 
-		read_latest_callback callback = { *this, id, offset, size, result, mix_states(id) };
+		read_latest_callback callback = { sess, id, offset, size, result, mix_states(id) };
 		prepare_latest(id, callback.groups).connect(callback);
 	}
 	return result;
@@ -903,12 +905,13 @@ async_write_result session::write_data(const key &id, const data_pointer &file, 
 struct chunk_handler : public std::enable_shared_from_this<chunk_handler> {
 
 	chunk_handler(const async_write_result::handler &handler, const session &sess,
-				  const key &id, const data_pointer &content, const uint64_t &remote_offset, const uint64_t &chunk_size)
+				  const key &id, const data_pointer &content, const uint64_t &remote_offset, const uint64_t &local_offset, const uint64_t &chunk_size)
 		: handler(handler)
 		, sess(sess.clone())
 		, id (id)
 		, content(content)
 		, remote_offset(remote_offset)
+		, local_offset(local_offset)
 		, chunk_size(chunk_size)
 	{
 		//this->sess.set_filter(filters::all_with_ack);
@@ -926,14 +929,14 @@ struct chunk_handler : public std::enable_shared_from_this<chunk_handler> {
 		}
 		sess.set_groups(groups);
 
-		remote_offset += chunk_size;
-		if (remote_offset + chunk_size >= content.size()) {
-			auto write_content = content.slice(remote_offset, content.size() - remote_offset);
-			auto awr = sess.write_commit(id, write_content, remote_offset, content.size());
+		local_offset += chunk_size;
+		if (local_offset + chunk_size >= content.size()) {
+			auto write_content = content.slice(local_offset, content.size() - local_offset);
+			auto awr = sess.write_commit(id, write_content, remote_offset + local_offset, remote_offset + content.size());
 			awr.connect(std::bind(&chunk_handler::finish, shared_from_this(), std::placeholders::_1, std::placeholders::_2));
 		} else {
-			auto write_content = content.slice(remote_offset, chunk_size);
-			auto awr = sess.write_plain(id, write_content, remote_offset);
+			auto write_content = content.slice(local_offset, chunk_size);
+			auto awr = sess.write_plain(id, write_content, remote_offset + local_offset);
 			awr.connect(std::bind(&chunk_handler::write_next, shared_from_this(), std::placeholders::_1, std::placeholders::_2));
 		}
 	}
@@ -949,7 +952,8 @@ struct chunk_handler : public std::enable_shared_from_this<chunk_handler> {
 
 	key id;
 	data_pointer content;
-	uint64_t remote_offset;
+	const uint64_t remote_offset;
+	uint64_t local_offset;
 	uint64_t chunk_size;
 
 };
@@ -959,13 +963,13 @@ async_write_result session::write_data(const key &id, const data_pointer &file, 
 	if (file.size() <= chunk_size || chunk_size == 0)
 		return write_data(id, file, remote_offset);
 
-	data_pointer write_content = file.slice(remote_offset, chunk_size);
-	auto awr = write_prepare(id, write_content, remote_offset, file.size());
+	data_pointer write_content = file.slice(0, chunk_size);
+	auto awr = write_prepare(id, write_content, remote_offset, remote_offset + file.size());
 
 	async_write_result res(*this);
 	async_write_result::handler handler(res);
 
-	auto ch = std::make_shared<chunk_handler>(handler, *this, id, file, remote_offset, chunk_size);
+	auto ch = std::make_shared<chunk_handler>(handler, *this, id, file, remote_offset, 0, chunk_size);
 	awr.connect(std::bind(&chunk_handler::write_next, ch, std::placeholders::_1, std::placeholders::_2));
 
 	return res;
@@ -1308,26 +1312,26 @@ std::string session::lookup_address(const key &id, int group_id)
 	return std::string(buf, strlen(buf));
 }
 
-void session::transform(const std::string &data, struct dnet_id &id)
+void session::transform(const std::string &data, struct dnet_id &id) const
 {
 	dnet_transform(m_data->session_ptr, (void *)data.data(), data.size(), &id);
 	id.trace_id = m_data->trace_id;
 	trace_id = m_data->trace_id;
 }
 
-void session::transform(const std::string &data, struct dnet_raw_id &id)
+void session::transform(const std::string &data, struct dnet_raw_id &id) const
 {
 	dnet_transform_raw(m_data->session_ptr, (void *)data.data(), data.size(), (char *)id.id, sizeof(id.id));
 }
 
-void session::transform(const data_pointer &data, dnet_id &id)
+void session::transform(const data_pointer &data, dnet_id &id) const
 {
 	dnet_transform(m_data->session_ptr, data.data(), data.size(), &id);
 	id.trace_id = m_data->trace_id;
 	trace_id = m_data->trace_id;
 }
 
-void session::transform(const key &id)
+void session::transform(const key &id) const
 {
 	const_cast<key&>(id).transform(*this);
 }
@@ -1487,7 +1491,7 @@ class read_data_range_callback
 		void do_next(error_info *error)
 		{
 			scope *d = data.get();
-			struct dnet_node * const node = d->sess.get_node().get_native();
+			dnet_node * const node = d->sess.get_native_node();
 			d->has_any = false;
 
 			if (d->need_exit) {
@@ -1511,7 +1515,7 @@ class read_data_range_callback
 				d->need_exit = true;
 			}
 
-			logger log = d->sess.get_node().get_log();
+			logger log = d->sess.get_logger();
 
 			if (log.get_log_level() > DNET_LOG_NOTICE) {
 				int len = 6;
@@ -1564,7 +1568,7 @@ class read_data_range_callback
 			} else {
 				struct dnet_io_attr *rep = &d->rep;
 
-				dnet_log_raw(d->sess.get_node().get_native(),
+				dnet_log_raw(d->sess.get_native_node(),
 					DNET_LOG_NOTICE, "%s: rep_num: %llu, io_start: %llu, io_num: %llu, io_size: %llu\n",
 					dnet_dump_id(&d->id), (unsigned long long)rep->num, (unsigned long long)d->io.start,
 					(unsigned long long)d->io.num, (unsigned long long)d->io.size);
@@ -1627,7 +1631,7 @@ class remove_data_range_callback : public read_data_range_callback
 				d->last_exception = error;
 			} else {
 				if (d->has_any) {
-					dnet_log_raw(d->sess.get_node().get_native(), DNET_LOG_NOTICE,
+					dnet_log_raw(d->sess.get_native_node(), DNET_LOG_NOTICE,
 							"%s: rep_num: %llu, io_start: %llu, io_num: %llu, io_size: %llu\n",
 							dnet_dump_id(&d->id), (unsigned long long)d->rep.num, (unsigned long long)d->io.start,
 							(unsigned long long)d->io.num, (unsigned long long)d->io.size);
@@ -1682,7 +1686,7 @@ std::vector<std::string> session::read_data_range_raw(dnet_io_attr &io, int grou
 	return result;
 }
 
-async_read_result session::remove_data_range(dnet_io_attr &io, int group_id)
+async_read_result session::remove_data_range(const dnet_io_attr &io, int group_id)
 {
 	async_read_result result(*this);
 	async_result_handler<read_result_entry> handler(result);
@@ -1749,7 +1753,7 @@ void session::mix_states(const key &id, std::vector<int> &groups)
 	dnet_id raw = id.id();
 	int num = dnet_mix_states(m_data->session_ptr, &raw, &groups_ptr.data());
 	if (num < 0)
-		throw_error(num, "could not fetch groups");
+		throw_error(num, id, "could not fetch groups");
 	groups.assign(groups_ptr.data(), groups_ptr.data() + num);
 }
 void session::mix_states(std::vector<int> &groups)
@@ -1815,7 +1819,7 @@ async_iterator_result session::continue_iterator(const key &id, uint64_t iterato
 	data_pointer data = data_pointer::allocate(sizeof(dnet_iterator_request));
 	auto request = data.data<dnet_iterator_request>();
 	memset(request, 0, sizeof(dnet_iterator_request));
-	request->action = DNET_ITERATOR_ACTION_CONT;
+	request->action = DNET_ITERATOR_ACTION_CONTINUE;
 	request->id = iterator_id;
 
 	return iterator(id, data);
@@ -1834,15 +1838,7 @@ async_iterator_result session::cancel_iterator(const key &id, uint64_t iterator_
 
 async_exec_result session::exec(dnet_id *id, const std::string &event, const data_pointer &data)
 {
-	exec_context context = exec_context_data::create(event, data);
-
-	sph *s = context.m_data->sph.data<sph>();
-	s->flags = DNET_SPH_FLAGS_SRC_BLOCK;
-
-	if (id)
-		memcpy(s->src.id, id->id, sizeof(s->src.id));
-
-	return request(id, context);
+	return exec(id, -1, event, data);
 }
 
 async_exec_result session::exec(struct dnet_id *id, int src_key, const std::string &event, const data_pointer &data)
@@ -2035,14 +2031,21 @@ async_write_result session::bulk_write(const std::vector<dnet_io_attr> &ios, con
 	return bulk_write(ios, pointer_data);
 }
 
-node &session::get_node()
+logger session::get_logger() const
 {
-	return m_data->node_guard;
+	return m_data->logger;
 }
 
-const node &session::get_node() const
+ioremap::elliptics::node session::get_node() const
 {
-	return m_data->node_guard;
+	if (auto node_guard = m_data->node_guard.lock())
+		return node(node_guard);
+	return node();
+}
+
+dnet_node *ioremap::elliptics::session::get_native_node() const
+{
+	return dnet_session_get_node(m_data->session_ptr);
 }
 
 dnet_session *session::get_native()

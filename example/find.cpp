@@ -3,14 +3,14 @@
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
+ * it under the terms of the GNU Lesser General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  */
 
 #define _XOPEN_SOURCE 600
@@ -98,7 +98,7 @@ void finder::parse_lookup(const sync_generic_result &ret)
 			}
 
 			if (!info) {
-				dnet_log_raw(get_node().get_native(), DNET_LOG_DATA, "%s: FIND object: %s: should live at: %s\n",
+				dnet_log_raw(get_native_node(), DNET_LOG_DATA, "%s: FIND object: %s: should live at: %s\n",
 					dnet_dump_id(&cmd->id), addr_str, route_addr.c_str());
 			} else {
 				char tstr[64];
@@ -107,7 +107,7 @@ void finder::parse_lookup(const sync_generic_result &ret)
 				localtime_r((time_t *)&info->mtime.tsec, &tm);
 				strftime(tstr, sizeof(tstr), "%F %R:%S %Z", &tm);
 
-				dnet_log_raw(get_node().get_native(), DNET_LOG_DATA, "%s: FIND-OK object: %s: should live at: %s, "
+				dnet_log_raw(get_native_node(), DNET_LOG_DATA, "%s: FIND-OK object: %s: should live at: %s, "
 						"offset: %llu, size: %llu, mtime: %s, path: %s\n",
 					dnet_dump_id(&cmd->id), addr_str, route_addr.c_str(),
 					(unsigned long long)info->offset, (unsigned long long)info->size,
@@ -115,7 +115,7 @@ void finder::parse_lookup(const sync_generic_result &ret)
 			}
 		} else {
 			if (cmd->status != 0)
-				dnet_log_raw(get_node().get_native(), DNET_LOG_DATA, "%s: FIND object: status: %d\n",
+				dnet_log_raw(get_native_node(), DNET_LOG_DATA, "%s: FIND object: status: %d\n",
 						dnet_dump_id(&cmd->id), cmd->status);
 		}
 	}

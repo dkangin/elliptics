@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ *
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __DNET_INTERFACE_H
@@ -218,6 +222,7 @@ enum dnet_log_level {
 #define DNET_CFG_MIX_STATES		(1<<2)		/* mix states according to their weights before reading data */
 #define DNET_CFG_NO_CSUM		(1<<3)		/* globally disable checksum verification and update */
 #define DNET_CFG_RANDOMIZE_STATES	(1<<5)		/* randomize states for read requests */
+#define DNET_CFG_KEEPS_IDS_IN_CLUSTER	(1<<6)		/* keeps ids in elliptics cluster */
 
 struct dnet_log {
 	/*
@@ -391,12 +396,27 @@ struct dnet_config
 
 	struct srw_init_ctl	srw;
 
+	/* Total cache size */
 	uint64_t		cache_size;
 
 	int			cache_sync_timeout;
 
+	/* Caches number */
+	unsigned int		caches_number;
+
+	/* Cache pages number */
+	unsigned int	cache_pages_number;
+
+	/* Cache pages proportions */
+	unsigned int*	cache_pages_proportions;
+
+	/*
+	 * Monitor socket port
+	 */
+	unsigned int		monitor_port;
+
 	/* so that we do not change major version frequently */
-	int			reserved_for_future_use[11];
+	int			reserved_for_future_use[8 - (sizeof(unsigned int*) / sizeof(int))];
 };
 
 struct dnet_node *dnet_get_node_from_state(void *state);
@@ -489,20 +509,20 @@ static inline int dnet_server_convert_port(struct sockaddr *sa, unsigned int len
 	return 0;
 }
 
-static inline char *dnet_server_convert_dnet_addr_raw(struct dnet_addr *addr, char *inet_addr, int inet_size)
+static inline char *dnet_server_convert_dnet_addr_raw(const struct dnet_addr *addr, char *inet_addr, int inet_size)
 {
 	memset(inet_addr, 0, inet_size);
 	if (addr->family == AF_INET) {
-		struct sockaddr_in *in = (struct sockaddr_in *)addr->addr;
+		const struct sockaddr_in *in = (const struct sockaddr_in *)addr->addr;
 		snprintf(inet_addr, inet_size, "%s:%d", inet_ntoa(in->sin_addr), ntohs(in->sin_port));
 	} else if (addr->family == AF_INET6) {
-		struct sockaddr_in6 *in = (struct sockaddr_in6 *)addr->addr;
+		const struct sockaddr_in6 *in = (const struct sockaddr_in6 *)addr->addr;
 		snprintf(inet_addr, inet_size, NIP6_FMT":%d", NIP6(in->sin6_addr), ntohs(in->sin6_port));
 	}
 	return inet_addr;
 }
 
-static inline char *dnet_server_convert_dnet_addr(struct dnet_addr *sa)
+static inline char *dnet_server_convert_dnet_addr(const struct dnet_addr *sa)
 {
 	static char ___inet_addr[128];
 	return dnet_server_convert_dnet_addr_raw(sa, ___inet_addr, sizeof(___inet_addr));
@@ -519,7 +539,7 @@ static inline char *dnet_state_dump_addr_only(struct dnet_addr *a)
 	return dnet_server_convert_addr((struct sockaddr *)a->addr, a->addr_len);
 }
 
-static inline char *dnet_print_time(struct dnet_time *t)
+static inline char *dnet_print_time(const struct dnet_time *t)
 {
 	char str[64];
 	struct tm tm;
@@ -529,7 +549,7 @@ static inline char *dnet_print_time(struct dnet_time *t)
 	localtime_r((time_t *)&t->tsec, &tm);
 	strftime(str, sizeof(str), "%F %R:%S", &tm);
 
-	snprintf(__dnet_print_time, sizeof(__dnet_print_time), "%s.%06lu", str, t->tnsec / 1000);
+	snprintf(__dnet_print_time, sizeof(__dnet_print_time), "%s.%06llu", str, (long long unsigned) t->tnsec / 1000);
 	return __dnet_print_time;
 }
 
@@ -566,6 +586,7 @@ int dnet_add_state(struct dnet_node *n, char *addr_str, int port, int family, in
  */
 
 int dnet_state_num(struct dnet_session *s);
+int dnet_node_state_num(struct dnet_node *n);
 struct dnet_net_state *dnet_state_get_first(struct dnet_node *n, struct dnet_id *id);
 void dnet_state_put(struct dnet_net_state *st);
 
@@ -647,6 +668,8 @@ int dnet_lookup_object(struct dnet_session *s, struct dnet_id *id,
 	void *priv);
 
 int dnet_stat_local(struct dnet_net_state *st, struct dnet_id *id);
+
+int dnet_version_compare(struct dnet_net_state *st, int *version);
 
 /*!
  * Compares two dnet_time structs
@@ -814,11 +837,41 @@ int __attribute__((weak)) dnet_transform_node(struct dnet_node *n, const void *s
 int dnet_transform_raw(struct dnet_session *s, const void *src, uint64_t size, char *csum, unsigned int csize);
 
 /*
+ * Transformation implementation, currently it's sha512 hash.
+ * It calculates checksum for @src of @size and writes it to @id.
+ */
+int dnet_digest_transform(const void *src, uint64_t size, struct dnet_id *id);
+/*
+ * @dnet_digest_transform overload.
+ * Writes most of @csum_size bytes to @csum.
+ */
+int dnet_digest_transform_raw(const void *src, uint64_t size, void *csum, int csum_size);
+
+/*
+ * Calculates message autherization code based on digest_transformation.
+ * Uses data from @src of @size and @key of size @key_size. Result is written to @id.
+ */
+int dnet_digest_auth_transform(const void *src, uint64_t size, const void *key, uint64_t key_size, struct dnet_id *id);
+/*
+ * @dnet_digest_auth_transform overload.
+ * Writes most of @csum_size bytes to @csum.
+ */
+int dnet_digest_auth_transform_raw(const void *src, uint64_t size, const void *key, uint64_t key_size, void *csum, int csum_size);
+
+/*
  * Transform object id to id where to store object's secondary indexes table
  */
 void dnet_indexes_transform_object_id(struct dnet_node *node, const struct dnet_id *src, struct dnet_id *id);
 /*
- * Transform index id to id where to store secondary index's objects table
+ * Transform index id to id where to store secondary index's objects table.
+ * _prepare method makes initial transformation generic for every shard.
+ * _id_raw method makes shard-specific changes.
+ */
+void dnet_indexes_transform_index_prepare(struct dnet_node *node, const struct dnet_raw_id *src, struct dnet_raw_id *id);
+void dnet_indexes_transform_index_id_raw(struct dnet_node *node, struct dnet_raw_id *id, int shard_id);
+/*
+ * Transform index id to id where to store secondary index's objects table.
+ * It's equal to iterative calls of _prepare and _id_raw method.
  */
 void dnet_indexes_transform_index_id(struct dnet_node *node, const struct dnet_raw_id *src, struct dnet_raw_id *id, int shard_id);
 int dnet_indexes_get_shard_id(struct dnet_node *node, const struct dnet_raw_id *object_id);

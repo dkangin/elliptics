@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ * 
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
+ * 
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <sys/types.h>
@@ -93,9 +97,9 @@ static int dnet_socket_connect(struct dnet_node *n, int s, struct sockaddr *sa, 
 
 	dnet_set_sockopt(s);
 
-	dnet_log(n, DNET_LOG_INFO, "Connected to %s:%d.\n",
+	dnet_log(n, DNET_LOG_INFO, "Connected to %s:%d, socket: %d.\n",
 		dnet_server_convert_addr(sa, salen),
-		dnet_server_convert_port(sa, salen));
+		dnet_server_convert_port(sa, salen), s);
 
 	err = 0;
 
@@ -318,7 +322,7 @@ static int dnet_io_req_queue(struct dnet_net_state *st, struct dnet_io_req *orig
 	pthread_mutex_lock(&st->send_lock);
 	list_add_tail(&r->req_entry, &st->send_list);
 
-	if (!st->need_exit)
+	if (!st->__need_exit)
 		dnet_schedule_send(st);
 	pthread_mutex_unlock(&st->send_lock);
 
@@ -380,8 +384,8 @@ static int dnet_wait(struct dnet_net_state *st, unsigned int events, long timeou
 			st->read_s, pfd.revents);
 	err = -EINVAL;
 out_exit:
-	if (st->n->need_exit || st->need_exit) {
-		dnet_log(st->n, DNET_LOG_ERROR, "Need to exit.\n");
+	if (st->n->need_exit || st->__need_exit) {
+		dnet_log(st->n, DNET_LOG_ERROR, "Need to exit: node: %d, state: %d.\n", st->n->need_exit, st->__need_exit);
 		err = -EIO;
 	}
 
@@ -800,14 +804,17 @@ static void dnet_state_remove_and_shutdown(struct dnet_net_state *st, int error)
 
 	dnet_state_remove_nolock(st);
 
-	if (!st->need_exit)
-		st->need_exit = error;
+	if (!st->__need_exit) {
+		if (!error)
+			error = -123;
 
-	shutdown(st->read_s, 2);
-	shutdown(st->write_s, 2);
+		st->__need_exit = error;
+
+		shutdown(st->read_s, SHUT_RDWR);
+		shutdown(st->write_s, SHUT_RDWR);
+	}
 
 	pthread_mutex_unlock(&st->send_lock);
-
 }
 
 int dnet_state_reset_nolock_noclean(struct dnet_net_state *st, int error, struct list_head *head)
@@ -834,7 +841,7 @@ void dnet_state_reset(struct dnet_net_state *st, int error)
 
 void dnet_sock_close(int s)
 {
-	shutdown(s, 2);
+	shutdown(s, SHUT_RDWR);
 	close(s);
 }
 
@@ -874,17 +881,20 @@ int dnet_setup_control_nolock(struct dnet_net_state *st)
 			io->net_thread_pos = 0;
 		st->epoll_fd = io->net[pos].epoll_fd;
 
+		pthread_mutex_lock(&st->send_lock);
 		err = dnet_schedule_recv(st);
+		if (err) {
+			dnet_unschedule_send(st);
+			dnet_unschedule_recv(st);
+		}
+		pthread_mutex_unlock(&st->send_lock);
 		if (err)
-			goto err_out_unschedule;
+			goto err_out_exit;
 	}
 
 	return 0;
 
-err_out_unschedule:
-	dnet_unschedule_send(st);
-	dnet_unschedule_recv(st);
-
+err_out_exit:
 	st->epoll_fd = -1;
 	list_del_init(&st->storage_state_entry);
 	return err;
@@ -997,8 +1007,6 @@ err_out_send_destroy:
 err_out_trans_destroy:
 	pthread_mutex_destroy(&st->trans_lock);
 err_out:
-	dnet_sock_close(st->write_s);
-
 	return err;
 }
 
@@ -1035,6 +1043,8 @@ struct dnet_net_state *dnet_state_create(struct dnet_node *n,
 	}
 
 	fcntl(st->write_s, F_SETFD, FD_CLOEXEC);
+
+	dnet_log(n, DNET_LOG_DEBUG, "%s: sockets: %d/%d\n", dnet_server_convert_dnet_addr(addr), st->read_s, st->write_s);
 
 	err = dnet_state_micro_init(st, n, addr, join, process);
 	if (err)
@@ -1092,7 +1102,7 @@ struct dnet_net_state *dnet_state_create(struct dnet_node *n,
 	}
 
 	if (atomic_read(&st->refcnt) == 1) {
-		err = st->need_exit;
+		err = st->__need_exit;
 		if (!err)
 			err = -ECONNRESET;
 	}
@@ -1126,7 +1136,11 @@ err_out_exit:
 
 int dnet_state_num(struct dnet_session *s)
 {
-	struct dnet_node *n = s->node;
+	return dnet_node_state_num(s->node);
+}
+
+int dnet_node_state_num(struct dnet_node *n)
+{
 	struct dnet_net_state *st;
 	struct dnet_group *g;
 	int num = 0;
@@ -1171,6 +1185,8 @@ void dnet_state_destroy(struct dnet_net_state *st)
 		dnet_server_convert_dnet_addr(&st->addr), st->read_s, st->write_s, st->addr_num);
 
 	free(st->addrs);
+
+	memset(st, 0xff, sizeof(struct dnet_net_state));
 	free(st);
 }
 
@@ -1318,11 +1334,6 @@ err_out_exit:
 			(unsigned long long)(cmd->trans &~ DNET_TRANS_REPLY),
 			(unsigned long long)cmd->size, (unsigned long long)cmd->flags,
 			st->send_offset, r->dsize + r->hsize + r->fsize);
-	}
-
-	if (err && err != -EAGAIN) {
-		dnet_log(st->n, DNET_LOG_ERROR, "%s: setting send need_exit to %d\n", dnet_state_dump_addr(st), err);
-		st->need_exit = err;
 	}
 
 	if (total_size > sizeof(struct dnet_cmd)) {

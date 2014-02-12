@@ -31,6 +31,7 @@ option(HAVE_MODULE_BACKEND_SUPPORT "Build ioserv with shared library backend sup
 set(ELLIPTICS_VERSION "${ELLIPTICS_VERSION_ABI}.${ELLIPTICS_VERSION_MINOR}")
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
 include(CheckLargefile)
 include(CheckAtomic)
 include(CheckSendfile)
@@ -39,13 +40,6 @@ include(TestBigEndian)
 include(CheckProcStats)
 include(CreateStdint)
 include(FixRpath)
-
-configure_file(cmake/EllipticsConfig.cmake.in
-                "${PROJECT_BINARY_DIR}/cmake/EllipticsConfig.cmake"
-                @ONLY)
-configure_file(cmake/EllipticsConfigVersion.cmake.in
-                "${PROJECT_BINARY_DIR}/cmake/EllipticsConfigVersion.cmake"
-                @ONLY)
 
 create_stdint(${CMAKE_CURRENT_SOURCE_DIR}/include/elliptics/typedefs.h)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -91,7 +85,7 @@ find_package(Eblob REQUIRED)
 include_directories(${EBLOB_INCLUDE_DIRS})
 
 if (HAVE_MODULE_BACKEND_SUPPORT)
-    add_definitions(-DHAVE_MODULE_BACKEND_SUPPORT=1) 
+    add_definitions(-DHAVE_MODULE_BACKEND_SUPPORT=1)
 endif()
 
 # GoLD does no overlinking
@@ -118,6 +112,8 @@ add_subdirectory(cache)
 add_subdirectory(indexes)
 add_subdirectory(library)
 add_subdirectory(bindings)
+add_subdirectory(monitor)
+add_subdirectory(tests)
 if(WITH_EXAMPLES)
     add_subdirectory(example)
 endif()
@@ -144,4 +140,26 @@ install(FILES
         DESTINATION include/elliptics/
         )
 
-enable_testing()
+set(INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_PREFIX}/include")
+set(INSTALL_LIBRARY_DIR "${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX}")
+
+export(TARGETS elliptics_client elliptics_cpp
+    FILE "${PROJECT_BINARY_DIR}/EllipticsTargets.cmake")
+
+#export(PACKAGE Elliptics)
+
+configure_file(cmake/EllipticsConfig.cmake.in
+                "${PROJECT_BINARY_DIR}/cmake/EllipticsConfig.cmake"
+                @ONLY)
+configure_file(cmake/EllipticsConfigVersion.cmake.in
+                "${PROJECT_BINARY_DIR}/cmake/EllipticsConfigVersion.cmake"
+                @ONLY)
+
+install(FILES
+    "${PROJECT_BINARY_DIR}/cmake/EllipticsConfig.cmake"
+    "${PROJECT_BINARY_DIR}/cmake/EllipticsConfigVersion.cmake"
+    DESTINATION share/elliptics/cmake)
+install(EXPORT EllipticsTargets DESTINATION share/elliptics/cmake)
+
+FILE(GLOB man_pages "man/*")
+install(FILES ${man_pages} DESTINATION share/man/man1)

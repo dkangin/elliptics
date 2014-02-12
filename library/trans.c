@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ * 
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
+ * 
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <sys/types.h>
@@ -314,7 +318,7 @@ int dnet_trans_iterate_move_transaction(struct dnet_net_state *st, struct list_h
 
 	pthread_mutex_lock(&st->trans_lock);
 	list_for_each_entry_safe(t, tmp, &st->trans_list, trans_list_entry) {
-		if ((t->time.tv_sec >= tv.tv_sec) && !st->need_exit)
+		if ((t->time.tv_sec >= tv.tv_sec) && !st->__need_exit)
 			break;
 
 		localtime_r((time_t *)&t->start.tv_sec, &tm);
@@ -323,7 +327,7 @@ int dnet_trans_iterate_move_transaction(struct dnet_net_state *st, struct list_h
 		dnet_log(st->n, DNET_LOG_ERROR, "%s: trans: %llu TIMEOUT/need-exit: stall-check wait-ts: %ld, need-exit: %d, cmd: %s [%d], started: %s.%06lu\n",
 				dnet_state_dump_addr(st), (unsigned long long)t->trans,
 				(unsigned long)t->wait_ts.tv_sec,
-				st->need_exit,
+				st->__need_exit,
 				dnet_cmd_string(t->cmd.cmd), t->cmd.cmd,
 				str, t->start.tv_usec);
 
@@ -394,24 +398,41 @@ static void dnet_check_all_states(struct dnet_node *n)
 
 static int dnet_check_route_table(struct dnet_node *n)
 {
-	int rnd = rand();
+	int rnd;
 	struct dnet_id id;
-	int groups[128];
-	int group_num = 0, i;
+	int *groups;
+	int group_num = 0, i, err;
 	struct dnet_net_state *st;
 	struct dnet_group *g;
 
 	pthread_mutex_lock(&n->state_lock);
 	list_for_each_entry(g, &n->group_list, group_entry) {
-		groups[group_num++] = g->group_id;
-
-		if (group_num > (int)ARRAY_SIZE(groups))
-			break;
+		group_num++;
 	}
 	pthread_mutex_unlock(&n->state_lock);
 
-	for (i = 0; i < group_num; ++i) {
-		id.group_id = groups[i];
+	groups = malloc(group_num);
+	if (!groups) {
+		err = -ENOMEM;
+		goto err_out_exit;
+	}
+
+	i = 0;
+	pthread_mutex_lock(&n->state_lock);
+	list_for_each_entry(g, &n->group_list, group_entry) {
+		groups[i++] = g->group_id;
+
+		if (i >= group_num) {
+			group_num = i;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&n->state_lock);
+
+	for (i = 0; i < (5 < group_num ? 5 : group_num); ++i) {
+		rnd = rand() % group_num;
+
+		id.group_id = groups[rnd];
 		memcpy(id.id, &rnd, sizeof(rnd));
 
 		st = dnet_state_get_first(n, &id);
@@ -421,7 +442,10 @@ static int dnet_check_route_table(struct dnet_node *n)
 		}
 	}
 
-	return 0;
+	free(groups);
+
+err_out_exit:
+	return err;
 }
 
 static void *dnet_reconnect_process(void *data)

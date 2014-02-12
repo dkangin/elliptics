@@ -1,3 +1,22 @@
+/*
+ * Copyright 2013+ Ruslan Nigmatullin <euroelessar@yandex.ru>
+ *
+ * This file is part of Elliptics.
+ *
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Elliptics is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "local_session.h"
 #include <map>
 
@@ -15,7 +34,7 @@ static int noop_process(struct dnet_net_state *, struct epoll_event *) { return 
 #undef list_entry
 #define list_entry(ptr, type, member) ({			\
 	const list_head *__mptr = (ptr);	\
-	(dnet_io_req *)( (char *)__mptr - offsetof(dnet_io_req, member) );})
+	(dnet_io_req *)( (char *)__mptr - dnet_offsetof(dnet_io_req, member) );})
 
 #undef list_for_each_entry_safe
 #define list_for_each_entry_safe(pos, n, head, member)			\
@@ -24,7 +43,7 @@ static int noop_process(struct dnet_net_state *, struct epoll_event *) { return 
 	     &pos->member != (head); 					\
 	     pos = n, n = list_entry(n->member.next, decltype(*n), member))
 
-local_session::local_session(dnet_node *node) : m_flags(DNET_IO_FLAGS_CACHE)
+local_session::local_session(dnet_node *node) : m_ioflags(DNET_IO_FLAGS_CACHE), m_cflags(DNET_FLAGS_NOLOCK)
 {
 	m_state = reinterpret_cast<dnet_net_state *>(malloc(sizeof(dnet_net_state)));
 	if (!m_state)
@@ -35,7 +54,7 @@ local_session::local_session(dnet_node *node) : m_flags(DNET_IO_FLAGS_CACHE)
 
 	memset(m_state, 0, sizeof(dnet_net_state));
 
-	m_state->need_exit = 1;
+	m_state->__need_exit = -1;
 	m_state->write_s = -1;
 	m_state->read_s = -1;
 
@@ -51,7 +70,12 @@ local_session::~local_session()
 
 void local_session::set_ioflags(uint32_t flags)
 {
-	m_flags = flags;
+	m_ioflags = flags;
+}
+
+void local_session::set_cflags(uint64_t flags)
+{
+	m_cflags = flags;
 }
 
 data_pointer local_session::read(const dnet_id &id, int *errp)
@@ -68,14 +92,14 @@ data_pointer local_session::read(const dnet_id &id, uint64_t *user_flags, dnet_t
 	memcpy(io.id, id.id, DNET_ID_SIZE);
 	memcpy(io.parent, id.id, DNET_ID_SIZE);
 
-	io.flags = DNET_IO_FLAGS_NOCSUM | m_flags;
+	io.flags = DNET_IO_FLAGS_NOCSUM | m_ioflags;
 
 	dnet_cmd cmd;
 	memset(&cmd, 0, sizeof(cmd));
 
 	cmd.id = id;
 	cmd.cmd = DNET_CMD_READ;
-	cmd.flags |= DNET_FLAGS_NOLOCK;
+	cmd.flags |= m_cflags;
 	cmd.size = sizeof(io);
 
 	int err = dnet_process_cmd_raw(m_state, &cmd, &io, 0);
@@ -154,7 +178,7 @@ int local_session::write(const dnet_id &id, const char *data, size_t size, uint6
 
 	memcpy(io.id, id.id, DNET_ID_SIZE);
 	memcpy(io.parent, id.id, DNET_ID_SIZE);
-	io.flags |= DNET_IO_FLAGS_COMMIT | DNET_IO_FLAGS_NOCSUM | m_flags;
+	io.flags |= DNET_IO_FLAGS_COMMIT | DNET_IO_FLAGS_NOCSUM | m_ioflags;
 	io.size = size;
 	io.num = size;
 	io.user_flags = user_flags;
@@ -175,7 +199,7 @@ int local_session::write(const dnet_id &id, const char *data, size_t size, uint6
 
 	cmd.id = id;
 	cmd.cmd = DNET_CMD_WRITE;
-	cmd.flags |= DNET_FLAGS_NOLOCK;
+	cmd.flags |= m_cflags;
 	cmd.size = datap.size();
 
 	int err = dnet_process_cmd_raw(m_state, &cmd, datap.data(), 0);
@@ -188,7 +212,7 @@ int local_session::write(const dnet_id &id, const char *data, size_t size, uint6
 data_pointer local_session::lookup(const dnet_cmd &tmp_cmd, int *errp)
 {
 	dnet_cmd cmd = tmp_cmd;
-	cmd.flags |= DNET_FLAGS_NOLOCK;
+	cmd.flags |= m_cflags;
 	cmd.size = 0;
 
 	*errp = dnet_process_cmd_raw(m_state, &cmd, NULL, 0);
@@ -217,13 +241,42 @@ data_pointer local_session::lookup(const dnet_cmd &tmp_cmd, int *errp)
 	return data_pointer();
 }
 
-int local_session::update_index_internal(const dnet_id &id, const dnet_raw_id &index, const data_pointer &data, update_index_action action)
+int local_session::remove(const dnet_id &id)
+{
+	dnet_cmd cmd;
+	memset(&cmd, 0, sizeof(cmd));
+
+	cmd.id = id;
+	cmd.cmd = DNET_CMD_DEL;
+	cmd.flags |= m_cflags;
+	cmd.size = sizeof(dnet_io_attr);
+
+	dnet_io_attr io;
+	memset(&io, 0, sizeof(io));
+	memcpy(io.id, id.id, DNET_ID_SIZE);
+	memcpy(io.parent, id.id, DNET_ID_SIZE);
+	io.flags |= m_ioflags;
+
+	int err = dnet_process_cmd_raw(m_state, &cmd, &io, 0);
+
+	clear_queue(&err);
+
+	return err;
+}
+
+int local_session::update_index_internal(const dnet_id &id, const dnet_raw_id &index, const data_pointer &data, uint32_t action)
+{
+	raw_data_pointer tmp = { data.data(), data.size() };
+	return update_index_internal(id, index, tmp, action);
+}
+
+int local_session::update_index_internal(const dnet_id &id, const dnet_raw_id &index, const raw_data_pointer &data, uint32_t action)
 {
 	struct timeval start, end;
 
 	gettimeofday(&start, NULL);
 
-	data_buffer buffer(sizeof(dnet_indexes_request) + sizeof(dnet_indexes_request_entry) + data.size());
+	data_buffer buffer(sizeof(dnet_indexes_request) + sizeof(dnet_indexes_request_entry) + data.size);
 
 	dnet_indexes_request request;
 	dnet_indexes_request_entry entry;
@@ -236,12 +289,12 @@ int local_session::update_index_internal(const dnet_id &id, const dnet_raw_id &i
 	buffer.write(request);
 
 	entry.id = index;
-	entry.size = data.size();
+	entry.size = data.size;
 	entry.flags |= action;
 
 	buffer.write(entry);
-	if (!data.empty()) {
-		buffer.write(data.data<char>(), data.size());
+	if (data.size > 0) {
+		buffer.write(static_cast<const char *>(data.data), data.size);
 	}
 
 	data_pointer datap = std::move(buffer);
@@ -267,7 +320,7 @@ int local_session::update_index_internal(const dnet_id &id, const dnet_raw_id &i
 
 		dnet_log(m_state->n, DNET_LOG_INFO, "%s: updating internal index: %s, data-size: %zd, action: %s, "
 				"time: %ld usecs\n",
-				dnet_dump_id(&id), index_str, data.size(), update_index_action_strings[action], diff);
+				dnet_dump_id(&id), index_str, data.size, update_index_action_strings[action], diff);
 	}
 
 	return err;

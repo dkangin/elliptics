@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ * 
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
+ * 
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define _XOPEN_SOURCE 600
@@ -275,6 +279,7 @@ static int file_read(struct file_backend_root *r, void *state, struct dnet_cmd *
 		goto err_out_close_fd;
 	}
 
+	io->total_size = st.st_size;
 	io->size = size;
 	err = dnet_send_read_data(state, cmd, io, NULL, fd, io->offset, 1);
 	if (err)
@@ -370,27 +375,6 @@ err_out_exit:
 	return err;
 }
 
-static int file_bulk_read(struct file_backend_root *r, void *state, struct dnet_cmd *cmd, void *data)
-{
-	int err = -1, ret;
-	struct dnet_io_attr *io = data;
-	struct dnet_io_attr *ios = io+1;
-	uint64_t count = 0;
-	uint64_t i;
-
-	dnet_convert_io_attr(io);
-	count = io->size / sizeof(struct dnet_io_attr);
-
-	for (i = 0; i < count; i++) {
-		ret = file_read(r, state, cmd, &ios[i]);
-		if (!ret)
-			err = 0;
-		else if (err == -1)
-			err = ret;
-	}
-
-	return err;
-}
 static int file_backend_command_handler(void *state, void *priv, struct dnet_cmd *cmd,void *data)
 {
 	int err;
@@ -412,14 +396,11 @@ static int file_backend_command_handler(void *state, void *priv, struct dnet_cmd
 		case DNET_CMD_DEL:
 			err = file_del(r, state, cmd, data);
 			break;
-		case DNET_CMD_BULK_READ:
-			err = file_bulk_read(r, state, cmd, data);
-			break;
 		case DNET_CMD_READ_RANGE:
 			err = -ENOTSUP;
 			break;
 		default:
-			err = -EINVAL;
+			err = -ENOTSUP;
 			break;
 	}
 

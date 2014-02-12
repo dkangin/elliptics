@@ -1,10 +1,26 @@
 #!/usr/bin/env python
 
+# =============================================================================
+# 2013+ Copyright (c) Alexey Ivanov <rbtz@ph34r.me>
+# 2013+ Copyright (c) Kirill Smorodinnikov <shaitkir@gmail.com>
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# =============================================================================
+
 """
 New recovery mechanism for elliptics that utilizes iterators and metadata.
 
-For now it supports two recovery methods: `merge` and `dc`:
- * `merge` is used for recovery within hash ring (aka group)
+For now it supports three recovery methods: `merge` and `dc`:
+ * `merge` is used for recovery within hash ring (aka group). It uses all nodes from some hash ring.
  * `dc` is used for recovery across different hash rings thus maintaining replica counts.
 
 More information about recovery process can be found at:
@@ -16,7 +32,7 @@ import sys
 import logging
 import logging.handlers
 
-from elliptics_recovery.route import RouteList, Address
+from elliptics_recovery.route import RouteList
 from elliptics_recovery.etime import Time
 from elliptics_recovery.utils.misc import elliptics_create_node, elliptics_create_session
 from elliptics_recovery.monitor import Monitor
@@ -24,6 +40,7 @@ from elliptics_recovery.monitor import Monitor
 # XXX: change me before BETA
 sys.path.insert(0, "bindings/python/")
 import elliptics
+from elliptics import Address
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -44,6 +61,7 @@ STAT_TEXT = 'text'
 ALLOWED_STATS = (STAT_NONE, STAT_TEXT)
 
 TMP_FILE_PREFIXES = ['iterator_', 'diff_', 'merge_']
+
 
 def cleanup(path):
     for file_name in os.listdir(path):
@@ -93,6 +111,12 @@ if __name__ == '__main__':
                       help="Will be waiting for user input at the finish.")
     parser.add_option("-m", "--monitor-port", action="store", dest="monitor_port", default=0,
                       help="Enable remote monitoring on provided port [default: disabled]")
+    parser.add_option("-w", "--wait-timeout", action="store", dest="wait_timeout", default="3600",
+                      help="[Wait timeout for elliptics operations default: %default]")
+    parser.add_option("-a", "--attemps", action="store", dest="attempts", default=1,
+                      help="Number of attempts to recover one key")
+    parser.add_option("-o", "--one-node", action="store_true", dest="one_node", default=False,
+                      help="Iterate only one node provided by -r/--remote [default: %default]")
 
     (options, args) = parser.parse_args()
 
@@ -109,6 +133,7 @@ if __name__ == '__main__':
     ctx = Ctx()
     ctx.dry_run = options.dry_run
     ctx.safe = options.safe
+    ctx.one_node = options.one_node
 
     ctx.tmp_dir = options.tmp_dir.replace('%TYPE%', recovery_type)
     if not os.path.exists(ctx.tmp_dir):
@@ -130,13 +155,13 @@ if __name__ == '__main__':
 
         # FIXME: It may be inappropriate to use one log for both
         # elliptics library and python app, esp. in presence of auto-rotation
-        fh = logging.handlers.RotatingFileHandler(ctx.log_file, maxBytes=1024*1024, backupCount=5)
+        fh = logging.FileHandler(ctx.log_file)
         fh.setFormatter(formatter)
         fh.setLevel(logging.DEBUG)
         log.addHandler(fh)
     except Exception as e:
-        raise ValueError("Can't parse log_level: '{0}': {1}".format(
-            options.elliptics_log_level, repr(e)))
+        raise ValueError("Can't parse log_level: '{0}': {1}"
+                         .format(options.elliptics_log_level, repr(e)))
     log.info("Using elliptics client log level: {0}".format(ctx.log_level))
 
     try:
@@ -196,6 +221,14 @@ if __name__ == '__main__':
         raise ValueError("Can't parse nprocess: '{0}': {1}".format(
             options.nprocess, repr(e)))
 
+    try:
+        ctx.attempts = int(options.attempts)
+        if ctx.attempts <= 0:
+            raise ValueError("Number of attempts should be positive: {0}".format(ctx.attempts))
+    except Exception as e:
+        raise ValueError("Can't parse attempts: '{0}': {1}"
+                         .format(options.attempts, repr(e)))
+
     if options.stat not in ALLOWED_STATS:
         raise ValueError("Unknown output format: '{0}'. Available formats are: {1}".format(
             options.stat, ALLOWED_STATS))
@@ -214,6 +247,11 @@ if __name__ == '__main__':
     except Exception as e:
         raise ValueError("Can't parse monitor_port: '{0}': {1}".format(options.monitor_port, repr(e)))
 
+    try:
+        ctx.wait_timeout = int(options.wait_timeout)
+    except Exception as e:
+        raise ValueError("Can't parse wait_timeout: '{0}': {1}".format(options.wait_timeout, repr(e)))
+
     log.info("Initializing monitor")
     ctx.monitor = Monitor(ctx, ctx.monitor_port)
 
@@ -231,7 +269,9 @@ if __name__ == '__main__':
     ctx.elog = elliptics.Logger(ctx.log_file, int(ctx.log_level))
 
     log.debug("Creating node")
-    node = elliptics_create_node(address=ctx.address, elog=ctx.elog)
+    node = elliptics_create_node(address=ctx.address,
+                                 elog=ctx.elog,
+                                 wait_timeout=ctx.wait_timeout)
 
     log.debug("Creating session for: {0}".format(ctx.address))
     session = elliptics_create_session(node=node, group=0)

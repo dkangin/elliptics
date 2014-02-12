@@ -1,3 +1,302 @@
+elliptics (2.24.15.7) unstable; urgency=low
+
+  * Monitoring: Added rwlock on access to dnet_node::monitor
+  * Get rid of get_node calls
+  * client: Fixes for x86 platform
+  * Core: Limited size of io queues to the number of io threads * 1000. Added building iterate.cpp from example to main build without installation.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Wed, 05 Feb 2014 01:21:57 +0400
+
+elliptics (2.24.15.6) unstable; urgency=low
+
+  * debian: provide and replace *-2.24 package versions
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Thu, 30 Jan 2014 16:26:13 +0400
+
+elliptics (2.24.15.5) unstable; urgency=low
+
+  * debian: elliptics/-dev provides elliptics/-dev-2.24 now
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Thu, 30 Jan 2014 00:23:10 +0400
+
+elliptics (2.24.15.4) unstable; urgency=low
+
+  * debian: elliptics-client provides elliptics-client-2.24 now
+  * Tests: fixed indent in run_tests.py
+  * Tests: running run_tests.py with proper python
+  * Tests: fixed build on rhel 5
+  * Tests: Fixed pep8 warnings and indent
+  * Monitoring: fixed warning on build
+  * Monitor&Doxygen: Added doxygen code documentation to monitor
+  * read-callback: only run read recovery when we have read the whole object. Added read recovery debug.
+  * dnet_io_attr: added total_size field (without ABI changes), which contains total size of the read record. In particular useful when client asks for part of the object (by specifying size in read request).
+  * Monitor: fixed build on lucid.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Thu, 30 Jan 2014 00:09:45 +0400
+
+elliptics (2.24.15.3) unstable; urgency=low
+
+  * Python: Fixed typo in docstrings.
+  * Python: added ability to clone session.
+  * Python: added keeping node inside python elliptics.Session to insure that session will be deleted after node.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Fri, 24 Jan 2014 03:48:36 +0400
+
+elliptics (2.24.15.2) unstable; urgency=low
+
+  * trans: randomize route table update: select 5 random groups and read table from one random node from each selected group
+  * tests: fixed python formatting
+  * tests: fixed pyton indent
+  * test: Don't use inline if/else syntax
+  * Python: Fixed copy-paste in session.py docstrings
+  * Python: fixed writting out of memory
+  * Python: fixed None usage as Id in session.exec_()
+  * Monitor: Added REST-like api for getting monitor statistics
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 20 Jan 2014 22:07:17 +0400
+
+elliptics (2.24.15.1) unstable; urgency=low
+
+  * prepare_latest fix
+  * tests: set stdout to sys.stdout instead of PIPE
+  * Monitor: Added ability to extend monitor statistics via custom statistics providers.
+  * Python: Fixed rebase conflicts.
+  * srw: Don't call cocaine::app_t::stop on stopped apps
+  * tests: Write artifacts to source directory
+  * tests: Fixed path to cocaine runtime
+  * Monitor: fixed losing elliptics_monitor.so via making elliptics_monitor static library with -fPIC
+  * Python: downgraded checking python objec on None for boost 1.40 which doesn't support is_none() method
+  * Monitor: Made elliptics_monitor as shared library
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Thu, 09 Jan 2014 19:22:36 +0400
+
+elliptics (2.24.15.0) unstable; urgency=low
+
+  * cache: treap implementation, cache distribution changes
+  * monitor: initial implementation
+  * python: filters and checkers
+  * index: remove implementation
+  * tests: new srw test, moved to new testing framework
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Wed, 25 Dec 2013 23:53:20 +0400
+
+elliptics (2.24.14.36) unstable; urgency=low
+
+  * cache: Improved hash function in cache
+  * * Use last 8 bytes in addition to first one. Otherwise all keys for specific shard comes to single cache object.
+  * Python: Fixed accepting IoAttr instead of Id in read/write operations. Fixed overriding write_data by write_data_by_chunks.
+  * Python: Provided Error, NotFoundError and TimeoutError directly from elliptics module. Removed hiding elliptics.core module.
+
+ -- Ruslan Nigmatullin <euroelessar@yandex.ru>  Thu, 19 Dec 2013 15:54:38 +0400
+
+elliptics (2.24.14.35) unstable; urgency=low
+
+  * socket: alot of debug and double-close checks
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Wed, 11 Dec 2013 06:31:09 +0400
+
+elliptics (2.24.14.34) unstable; urgency=low
+
+  * python: Acquire GIL in python binding in async_result::get()
+  * config: update reserved fields to maintain proper ABI structure size
+  * Python: Updated docstrings for binding
+  * Merge recovery: changed statistics name to clearly separate remote and local request counters
+  * Recovery: fixed removed_bytes in statistics for keys which hasn't been copied because proper node already has newer keys datas
+  * Recovery: fixed removed_bytes in statistics for key which hasn't been copied because proper node already has newer key data
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Wed, 11 Dec 2013 01:54:38 +0400
+
+elliptics (2.24.14.33) unstable; urgency=low
+
+  * Recovery: Added -o option to merge which limits it to one node.
+  * Recovery: Replaced merge by deep_merge with removing of the last. Used FileHandler without rotation for dnet_recovery logs.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Thu, 05 Dec 2013 19:11:17 +0400
+
+elliptics (2.24.14.32) unstable; urgency=low
+
+  * Filters: Fixed filters::all filter
+  * IDS: Added config flag which turns on saving and recovering ids from elliptics cluster.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Thu, 05 Dec 2013 02:50:18 +0400
+
+elliptics (2.24.14.31) unstable; urgency=low
+
+  * Recovery: Added clearing AsyncResults in handlers to prevent cross-links to objects. Minimized sending statistics.
+  * Python: fixed memory leak and GC problem with using connect to AsyncResult.
+  * Recovery: fixed inverting node ranges in deep_merge.
+  * Recovery: Updated logs for deep_merge. Added parameter '-z' for setting one log file size which would be rotated.
+  * Recovery: Extended logs for deep_merge.
+
+ -- Kirill Smorodinnikov <shaitan@yandex-team.ru>  Wed, 04 Dec 2013 15:13:01 +0400
+
+elliptics (2.24.14.30) unstable; urgency=low
+
+  * Recovery: added handling safe flag which turns off removing key from unproper node.
+  * Recovery: added returning result from deep_merge.
+  * Recovery: added attempts to lookup/read/write/remove.
+  * Recovery: Rewrited deep_merge. Now deep_merge is synchronization keys within group all nodes at once. More details: http://doc.reverbrain.com/elliptics:replication.
+  * Python: Removed debug code.
+  * Python: Removed elliptics.Data and uses python string instead of. Fixed specifying object method as callback for elliptics.AsyncResult.connect.
+  * Python: elliptics.Data added to_string and __repr__ methods which returns string representation of internal data
+  * Python: changed counters output to dict.
+  * Build: Fixed compilation errors on Lucid
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 02 Dec 2013 19:12:29 +0400
+
+elliptics (2.24.14.29) unstable; urgency=low
+
+  * Python: fixed counters in stat_log_counter. Core: Added const to input parameter in dnet_server_convert_dnet_addr
+  * Python: Fixed crash on requesting address/group_id from result entries.
+  * session: transform() should accept const session, since it doesn't modify it
+  * cache: scream loudly if cache operations with lock taks more than 100 ms
+  * Test: Use random ports for servers
+  * Python: fixed typo.
+  * cache_pages_number param added
+  * slru_cache refactored
+  * Caches_number configuration param added.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Wed, 27 Nov 2013 18:59:00 +0400
+
+elliptics (2.24.14.28) unstable; urgency=low
+
+  * state: fill state with 0xff prior its freeing for debug
+  * state: guard dnet_schedule_recv() with st->send_lock. dnet_schedule_send() is already guarded.
+  * state: s/need_exit/__need_exit. Prevent socket shutdown if __need_exit is set.
+  * state: when adding new state check reverse-lookup data, fail to add new state if wildcard address (like 0.0.0.0) has been received
+  * state: added more debug into just-connected-to address and its route table
+  * state: do not copy n->addrs -> st->addrs for joining but not listening states
+  * Python: added method for getting name of command.
+  * Build: Added egg-info files to rpm spec.
+  * Build: Fixed build on RHEL5/6.
+  * Python: provided group_id in address returned by some result entries. Restored counters in AddressStatistics.
+  * CMake: Don't export Elliptics package
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Sat, 23 Nov 2013 03:22:20 +0400
+
+elliptics (2.24.14.27) unstable; urgency=low
+
+  * debian: do not depend in runtime on source-version
+  * CMake: Include Targets file from Config.cmake
+  * Build: fixed copying python scriptcs on RHEL5/6
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Tue, 19 Nov 2013 23:56:38 +0400
+
+elliptics (2.24.14.26) unstable; urgency=low
+
+  * spec: depend on 0.21.26+ eblob for statistics
+  * Build: Moved redifining of __python at the top of spec file for rhel < 6.
+  * Build: Fixed build on RHEL5 and restored recovery and python bindings scripts in rpms.
+  * stat: added DNET_CNTR_NODE_FILES_REMOVED counter. It is only filled in eblob backend.
+  * cmake: export ELLIPTICS_LIBRARY_DIRS
+  * License: Change license from GPL to LGPL
+  * Core: Added public dnet_digest_*transform methods
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 18 Nov 2013 18:44:22 +0400
+
+elliptics (2.24.14.25) unstable; urgency=low
+
+  * core: forbid route table update with 0.0.0.0 addresses
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Sat, 16 Nov 2013 02:16:24 +0400
+
+elliptics (2.24.14.24) unstable; urgency=low
+
+  * core: added route/address debug
+  * Python: Use ${PYTHON_EXECUTABLE} in cmake scripts
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Fri, 15 Nov 2013 05:39:29 +0400
+
+elliptics (2.24.14.23) unstable; urgency=low
+
+  * io_client: Call wait() to async_remove_result
+  * Stat: In eblob statistics used DNET_CNTR_NODE_FILES for number of available records in eblob.
+  * Client: Some fixes connected with move semantic
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Wed, 13 Nov 2013 22:35:35 +0400
+
+elliptics (2.24.14.22) unstable; urgency=low
+
+  * net: copy all addresses into joining state
+  * Cocaine: Don't link with eblob
+  * CMake: Added EllipticsConfig.cmake
+  * Client: Add valid logging to bulk callbacks
+  * Indexes: Use enum for versions instead of raw ints
+  * Cocaine: Fixed duplication of files' in find result
+  * Server: Fixed segfault at exit
+  * crypto: fixed undefined dnet_offsetof macros usage
+  * Recovery: Added deep_merge recovery type. Updated docs for recovery.
+  * Build: Fixed missing python wrapper around elliptics.core.
+  * Indexes: Added comments to flags
+  * Indexes: Comments for remove_index_callback
+  * Indexes: Added session::remove_index_internal
+  * Indexes: Added ability to remove objects from indexes
+  * Indexes: Send bulk request only if server knows it
+  * Use data_pointer::allocate in callback_p.h
+  * Core: Add \n to end of message at logger
+  * indexes: Added bulk-behavior to find_indexes
+  * Python: Fixed get_address_ranges
+  * Python: Fixed __init__.py
+  * Python: provided python level log based on logging.
+  * Cpp: Extended comments and notes about write_prepare, write_plain and write_commit.
+  * Cpp: fixed write_data by chunks.
+  * Relicense Elliptics under LGPL 
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Wed, 13 Nov 2013 00:39:05 +0400
+
+elliptics (2.24.14.21) unstable; urgency=low
+
+  * Added more debug info for cache requests.
+  * Fixed bulk_read request.
+  * Fixed bug on cache overflow.
+  * Client: fixed write_data by chunks.
+  * Python: got data_pointer inside python binding as elliptics.Data. Removed restrict of using bp::list - now you can use any iterable object for those purpose.
+  * Added example script and c++ code for iterating specified nodes or all nodes in specified groups
+  * Removed useless code.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 21 Oct 2013 22:09:19 +0400
+
+elliptics (2.24.14.20) unstable; urgency=low
+
+  * Put man pages into packages
+  * Do not schedule network IO if state is in need-exit state
+  * Use correct session::remove() method
+  * Build: Fixed prefix in executing setup.py
+  * Do not write timestamp for read requests, it is meaningless in request.
+  * Added dnet_send_read_data() timings
+  * Python: Set default timeouts in elliptics.Config
+  * Python: Unlock GIL inside synchronous calls
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Tue, 15 Oct 2013 03:56:39 +0400
+
+elliptics (2.24.14.19) unstable; urgency=low
+
+  * Recovery: fixed skipping equals objects in diff
+  * Recovery: Fixed sorting and diffing objects.
+  * Python: fixed bulk_write
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Tue, 08 Oct 2013 16:57:37 +0400
+
+elliptics (2.24.14.18) unstable; urgency=low
+
+  * Minor python binding cleanups
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Tue, 08 Oct 2013 00:17:12 +0400
+
+elliptics (2.24.14.17) unstable; urgency=low
+
+  * Added size to dnet_iterator_response
+  * Python: if both key and timestamp is equal then size will be checked and larger object will be restored.
+  * Python: fixed is_none() for boost v1.40 compatibility.
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 07 Oct 2013 20:37:52 +0400
+
+elliptics (2.24.14.16) unstable; urgency=low
+
+  * Python binding rewrite
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 07 Oct 2013 16:50:17 +0400
+
 elliptics (2.24.14.15) unstable; urgency=low
 
   * Return EXFULL from srw->process() if srw/cocaine enqueue/write throws an exception.

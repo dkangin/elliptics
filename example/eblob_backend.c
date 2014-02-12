@@ -1,16 +1,20 @@
 /*
- * 2008+ Copyright (c) Evgeniy Polyakov <zbr@ioremap.net>
- * All rights reserved.
+ * Copyright 2008+ Evgeniy Polyakov <zbr@ioremap.net>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+ * This file is part of Elliptics.
+ * 
+ * Elliptics is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
+ * 
+ * Elliptics is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Elliptics.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define _XOPEN_SOURCE 600
@@ -319,6 +323,8 @@ static int blob_read(struct eblob_backend_config *c, void *state, struct dnet_cm
 			dnet_dump_id_str(io->id), err, strerror(-err));
 		goto err_out_exit;
 	}
+
+	io->total_size = size;
 
 	if (io->offset) {
 		if (io->offset >= size) {
@@ -713,28 +719,6 @@ err_out_exit:
 	return err;
 }
 
-static int blob_bulk_read(struct eblob_backend_config *c, void *state, struct dnet_cmd *cmd, void *data)
-{
-	int err = -1, ret;
-	struct dnet_io_attr *io = data;
-	struct dnet_io_attr *ios = io+1;
-	uint64_t count = 0;
-	uint64_t i;
-
-	dnet_convert_io_attr(io);
-	count = io->size / sizeof(struct dnet_io_attr);
-
-	for (i = 0; i < count; i++) {
-		ret = blob_read(c, state, cmd, &ios[i], i + 1 == count);
-		if (!ret)
-			err = 0;
-		else if (err == -1)
-			err = ret;
-	}
-
-	return err;
-}
-
 static int eblob_backend_checksum(struct dnet_node *n, void *priv, struct dnet_id *id, void *csum, int *csize) {
 	struct eblob_backend_config *c = priv;
 	struct eblob_backend *b = c->eblob;
@@ -843,14 +827,11 @@ static int eblob_backend_command_handler(void *state, void *priv, struct dnet_cm
 		case DNET_CMD_DEL:
 			err = blob_del(c, cmd);
 			break;
-		case DNET_CMD_BULK_READ:
-			err = blob_bulk_read(c, state, cmd, data);
-			break;
 		case DNET_CMD_DEFRAG:
 			err = blob_start_defrag(c, cmd, data);
 			break;
 		default:
-			err = -EINVAL;
+			err = -ENOTSUP;
 			break;
 	}
 
@@ -1010,6 +991,9 @@ int eblob_backend_storage_stat(void *priv, struct dnet_stat *st)
 			return err;
 	}
 
+	st->node_files = eblob_total_elements(r->eblob);
+	st->node_files_removed = eblob_stat_get_summary(r->eblob, EBLOB_LST_RECORDS_REMOVED);
+
 	return 0;
 }
 
@@ -1050,18 +1034,18 @@ static int dnet_blob_config_init(struct dnet_config_backend *b, struct dnet_conf
 		goto err_out_exit;
 	}
 
+	c->eblob = eblob_init(&c->data);
+	if (!c->eblob) {
+		err = -EINVAL;
+		goto err_out_last_read_lock_destroy;
+	}
+
 	memset(&st, 0, sizeof(struct dnet_stat));
 	err = eblob_backend_storage_stat(c, &st);
 	if (err)
 		goto err_out_last_read_lock_destroy;
 
 	c->vm_total = st.vm_total * st.vm_total * 1024 * 1024;
-
-	c->eblob = eblob_init(&c->data);
-	if (!c->eblob) {
-		err = -EINVAL;
-		goto err_out_last_read_lock_destroy;
-	}
 
 	cfg->cb = &b->cb;
 	cfg->storage_size = b->storage_size;
