@@ -20,6 +20,17 @@ static inline void copy_identifiers_cmd (uint8_t *src_key, uint8_t* original_id)
     }
 }
 
+static inline void reverse_copy_identifiers_cmd (uint8_t *dst_key, uint8_t *src_key)
+{
+    int id_size = sizeof (int64_t);
+    int i, j;
+    for (i = 0, j = EBLOB_ID_SIZE - 1; i < id_size; i++)
+    {
+        dst_key [j] = src_key [i];
+    }
+}
+
+int dnet_crypto_direct (const void *src, uint64_t size, void *dst, unsigned int *dsize);
 
 #ifdef __cplusplus
 }

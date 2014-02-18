@@ -28,6 +28,7 @@
 #include "elliptics/interface.h"
 
 #include "crypto/sha512.h"
+#include "elliptics/original_id_helpers.h"
 
 static void dnet_transform_final(void *dst, const void *src, unsigned int *rsize, unsigned int rs)
 {
@@ -142,4 +143,11 @@ int dnet_crypto_init(struct dnet_node *n)
 	t->priv = NULL;
 
 	return 0;
+}
+
+int dnet_crypto_direct (const void *src, uint64_t size, void *dst, unsigned int *dsize)
+{
+    struct dnet_session s;
+    memset (&s, 0, sizeof (struct dnet_session));
+    return dnet_local_digest_transform (NULL, &s, src, size, dst, dsize, 0);
 }
