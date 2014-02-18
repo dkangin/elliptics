@@ -24,7 +24,7 @@ static inline void reverse_copy_identifiers_cmd (uint8_t *dst_key, uint8_t *src_
 {
     int id_size = sizeof (int64_t);
     int i, j;
-    for (i = 0, j = EBLOB_ID_SIZE - 1; i < id_size; i++)
+    for (i = 0, j = EBLOB_ID_SIZE - 1; i < id_size; i++, j--)
     {
         dst_key [j] = src_key [i];
     }
