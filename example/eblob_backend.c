@@ -121,7 +121,7 @@ static int blob_iterate_callback(struct eblob_disk_control *dc,
     memset(key_elliptics_order.id, 0, EBLOB_ID_SIZE);
     reverse_copy_identifiers_cmd(key_elliptics_order.id, dc->key.id);
 
-    unsigned int transformed_size = 0;
+    unsigned int transformed_size = DNET_ID_SIZE;
     dnet_crypto_direct (key_elliptics_order.id, DNET_ID_SIZE, key_elliptics_transform.id, &transformed_size);
 
     reverse_copy_identifiers_cmd(key_elliptics_transform.id, dc->key.id);
